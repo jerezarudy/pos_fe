@@ -1,0 +1,26 @@
+[
+  {
+    "id": "item-001",
+    "name": "Test 1",
+    "category": "A",
+    "price": 150,
+    "cost": 100,
+    "inStock": 95
+  },
+  {
+    "id": "item-002",
+    "name": "Test 2",
+    "category": "B",
+    "price": 80,
+    "cost": 55,
+    "inStock": 12
+  },
+  {
+    "id": "item-003",
+    "name": "Test 3",
+    "category": "A",
+    "price": 220,
+    "cost": 170,
+    "inStock": 4
+  }
+]
