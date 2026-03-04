@@ -19,7 +19,7 @@ If you are developing a production application, we recommend using TypeScript wi
 
 1. Push this repo to GitHub (or GitLab/Bitbucket) and import it in Vercel.
 2. In Vercel **Project Settings → Environment Variables**, add:
-   - `VITE_API_BASE_URL` = `https://pos-be-sigma.vercel.app`
+   - `VITE_API_BASE_URL` = `https://pos-be-sigma.vercel.app` (must include `https://`)
 3. Build settings (auto-detected by Vercel, also in `vercel.json`):
    - Build Command: `npm run build`
    - Output Directory: `dist`

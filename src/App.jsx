@@ -89,9 +89,19 @@ function toUiItemStock(apiItem) {
 }
 
 function App() {
-  const apiBaseUrl = (
-    import.meta.env?.VITE_API_BASE_URL || "http://127.0.0.1:3000"
-  ).replace(/\/$/, "");
+  const apiBaseUrl = (() => {
+    const raw = String(
+      import.meta.env?.VITE_API_BASE_URL || "http://127.0.0.1:3000",
+    ).trim();
+
+    const withoutTrailing = raw.replace(/\/$/, "");
+    if (/^https?:\/\//i.test(withoutTrailing)) return withoutTrailing;
+    if (/^localhost(:\d+)?$/i.test(withoutTrailing)) return `http://${withoutTrailing}`;
+    if (/^[a-z0-9.-]+\.[a-z]{2,}(:\d+)?$/i.test(withoutTrailing))
+      return `https://${withoutTrailing}`;
+
+    return withoutTrailing;
+  })();
 
   const getInitialTheme = () => {
     const saved = window.localStorage.getItem("theme");
