@@ -56,7 +56,8 @@ function dateFromIsoDateInput(value) {
   const y = Number(match[1]);
   const m = Number(match[2]);
   const d = Number(match[3]);
-  if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) return null;
+  if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d))
+    return null;
   return new Date(y, m - 1, d);
 }
 
@@ -85,7 +86,11 @@ function daysBetweenInclusive(start, end) {
 
 function listDayKeysInRange(start, end) {
   const keys = [];
-  const cursor = new Date(start.getFullYear(), start.getMonth(), start.getDate());
+  const cursor = new Date(
+    start.getFullYear(),
+    start.getMonth(),
+    start.getDate(),
+  );
   const last = new Date(end.getFullYear(), end.getMonth(), end.getDate());
   while (cursor <= last) {
     keys.push(formatIsoDateInput(cursor));
@@ -113,11 +118,14 @@ function loadCashiersFromStorage() {
   const out = [];
   for (const u of list) {
     if (!u || typeof u !== "object") continue;
-    const userType = String(u.userType ?? u.role ?? u.type ?? "").trim().toLowerCase();
+    const userType = String(u.userType ?? u.role ?? u.type ?? "")
+      .trim()
+      .toLowerCase();
     if (userType !== "cashier") continue;
     const id = u.id ?? u._id ?? u.userId ?? u.uuid ?? "";
     if (!id) continue;
-    const label = String(u.name ?? u.fullName ?? u.email ?? id).trim() || String(id);
+    const label =
+      String(u.name ?? u.fullName ?? u.email ?? id).trim() || String(id);
     out.push({ id: String(id), label });
   }
   out.sort((a, b) =>
@@ -153,7 +161,11 @@ function toCsv(rows) {
   return rows.map((r) => r.map(escape).join(",")).join("\n");
 }
 
-function downloadTextFile({ filename, content, mime = "text/plain;charset=utf-8" }) {
+function downloadTextFile({
+  filename,
+  content,
+  mime = "text/plain;charset=utf-8",
+}) {
   const blob = new Blob([content], { type: mime });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -248,8 +260,7 @@ function normalizeSale(raw, costByItemId) {
     (items.length
       ? items.reduce(
           (sum, it) =>
-            sum +
-            (Number.isFinite(it.unitPrice) ? it.unitPrice : 0) * it.qty,
+            sum + (Number.isFinite(it.unitPrice) ? it.unitPrice : 0) * it.qty,
           0,
         )
       : null);
@@ -266,7 +277,8 @@ function normalizeSale(raw, costByItemId) {
     return sum + unitCost * it.qty;
   }, 0);
 
-  const grossProfit = derivedNet == null ? null : Math.max(0, derivedNet - costOfGoods);
+  const grossProfit =
+    derivedNet == null ? null : Math.max(0, derivedNet - costOfGoods);
 
   const dayKey = getLocalDayKey(createdAt);
   if (!dayKey) return null;
@@ -290,16 +302,15 @@ function aggregateByDay(sales) {
   const byDay = new Map();
   for (const sale of sales) {
     const key = sale.dayKey;
-    const current =
-      byDay.get(key) || {
-        dayKey: key,
-        grossSales: 0,
-        refunds: 0,
-        discounts: 0,
-        netSales: 0,
-        costOfGoods: 0,
-        grossProfit: 0,
-      };
+    const current = byDay.get(key) || {
+      dayKey: key,
+      grossSales: 0,
+      refunds: 0,
+      discounts: 0,
+      netSales: 0,
+      costOfGoods: 0,
+      grossProfit: 0,
+    };
     current.grossSales += sale.grossSales || 0;
     current.refunds += sale.refunds || 0;
     current.discounts += sale.discounts || 0;
@@ -379,15 +390,13 @@ function MiniLineChart({ labels, values, height = 240 }) {
     const span = max - min || 1;
     const innerW =
       MINI_CHART_WIDTH - MINI_CHART_PADDING_LEFT - MINI_CHART_PADDING_RIGHT;
-    const innerH =
-      height - MINI_CHART_PADDING_TOP - MINI_CHART_PADDING_BOTTOM;
+    const innerH = height - MINI_CHART_PADDING_TOP - MINI_CHART_PADDING_BOTTOM;
 
     return safeValues.map((v, i) => {
       const x =
         MINI_CHART_PADDING_LEFT +
         (labels.length <= 1 ? innerW / 2 : (i / (labels.length - 1)) * innerW);
-      const y =
-        MINI_CHART_PADDING_TOP + (1 - (v - min) / span) * innerH;
+      const y = MINI_CHART_PADDING_TOP + (1 - (v - min) / span) * innerH;
       return { x, y, v };
     });
   }, [height, labels.length, values]);
@@ -496,10 +505,14 @@ function MiniLineChart({ labels, values, height = 240 }) {
           )
             return null;
           const innerW =
-            MINI_CHART_WIDTH - MINI_CHART_PADDING_LEFT - MINI_CHART_PADDING_RIGHT;
+            MINI_CHART_WIDTH -
+            MINI_CHART_PADDING_LEFT -
+            MINI_CHART_PADDING_RIGHT;
           const x =
             MINI_CHART_PADDING_LEFT +
-            (labels.length <= 1 ? innerW / 2 : (idx / (labels.length - 1)) * innerW);
+            (labels.length <= 1
+              ? innerW / 2
+              : (idx / (labels.length - 1)) * innerW);
           return (
             <text
               key={`${label}-${idx}`}
@@ -589,7 +602,10 @@ export default function SalesSummaryPage({ apiBaseUrl, authToken, authUser }) {
           ? `${basePath}&page=${currentPage}`
           : `${basePath}?page=${currentPage}`;
         const payload = await apiRequest(path);
-        const parsed = parsePagedResponse(payload, { page: currentPage, limit: 1000 });
+        const parsed = parsePagedResponse(payload, {
+          page: currentPage,
+          limit: 1000,
+        });
         const pageData = Array.isArray(parsed.data) ? parsed.data : [];
         results.push(...pageData);
         if (!parsed.hasNext || pageData.length === 0) break;
@@ -670,26 +686,30 @@ export default function SalesSummaryPage({ apiBaseUrl, authToken, authUser }) {
         }
         for (const s of normalized) {
           if (!s.cashierId || s.cashierId === "null") continue;
-          const label = s.cashierName?.trim() ? s.cashierName.trim() : s.cashierId;
+          const label = s.cashierName?.trim()
+            ? s.cashierName.trim()
+            : s.cashierId;
           employeeMap.set(s.cashierId, label);
         }
         const employeeOptions = [...employeeMap.entries()]
           .map(([id, label]) => ({ id, label }))
-          .sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: "base" }));
+          .sort((a, b) =>
+            a.label.localeCompare(b.label, undefined, { sensitivity: "base" }),
+          );
         setEmployees(employeeOptions);
       } catch (e) {
         if (fetchId !== lastFetchId.current) return;
         const message =
           e instanceof Error ? e.message : "Failed to load sales summary.";
         setError(`${message} (Showing demo data)`);
-        setIsDemoData(true);
-        setSales(
-          generateDemoSales({
-            startKey: formatIsoDateInput(fetchStart),
-            endKey: formatIsoDateInput(fetchEnd),
-          }),
-        );
-        setEmployees([{ id: "demo", label: "Demo employee" }]);
+        setIsDemoData(false);
+        // setSales(
+        //   generateDemoSales({
+        //     startKey: formatIsoDateInput(fetchStart),
+        //     endKey: formatIsoDateInput(fetchEnd),
+        //   }),
+        // );
+        // setEmployees([{ id: "demo", label: "Demo employee" }]);
       } finally {
         if (fetchId === lastFetchId.current) setIsLoading(false);
       }
@@ -712,8 +732,12 @@ export default function SalesSummaryPage({ apiBaseUrl, authToken, authUser }) {
       return { tableRows: [], kpis: [], chart: { labels: [], values: [] } };
     }
 
-    const currentKeys = new Set(listDayKeysInRange(currentRange.start, currentRange.end));
-    const prevKeys = new Set(listDayKeysInRange(currentRange.prevStart, currentRange.prevEnd));
+    const currentKeys = new Set(
+      listDayKeysInRange(currentRange.start, currentRange.end),
+    );
+    const prevKeys = new Set(
+      listDayKeysInRange(currentRange.prevStart, currentRange.prevEnd),
+    );
 
     const currentSales = sales.filter((s) => currentKeys.has(s.dayKey));
     const prevSales = sales.filter((s) => prevKeys.has(s.dayKey));
@@ -769,13 +793,22 @@ export default function SalesSummaryPage({ apiBaseUrl, authToken, authUser }) {
 
     const chartLabels = dayKeys.map((k) => {
       const date = new Date(k);
-      return new Intl.DateTimeFormat("en-PH", { day: "2-digit", month: "short" }).format(date);
+      return new Intl.DateTimeFormat("en-PH", {
+        day: "2-digit",
+        month: "short",
+      }).format(date);
     });
     const chartValues = dayRows.map((r) => r[area] || 0);
 
-    const sortedForTable = [...dayRows].sort((a, b) => b.dayKey.localeCompare(a.dayKey));
+    const sortedForTable = [...dayRows].sort((a, b) =>
+      b.dayKey.localeCompare(a.dayKey),
+    );
 
-    return { tableRows: sortedForTable, kpis: kpiList, chart: { labels: chartLabels, values: chartValues } };
+    return {
+      tableRows: sortedForTable,
+      kpis: kpiList,
+      chart: { labels: chartLabels, values: chartValues },
+    };
   }, [area, currentRange, sales]);
 
   const totalPages = useMemo(() => {
@@ -817,7 +850,11 @@ export default function SalesSummaryPage({ apiBaseUrl, authToken, authUser }) {
     ]);
     const csv = `${toCsv([header, ...rows])}\n`;
     const filename = `sales-summary_${startDate || "start"}_${endDate || "end"}.csv`;
-    downloadTextFile({ filename, content: `\uFEFF${csv}`, mime: "text/csv;charset=utf-8" });
+    downloadTextFile({
+      filename,
+      content: `\uFEFF${csv}`,
+      mime: "text/csv;charset=utf-8",
+    });
   }, [endDate, startDate, tableRows]);
 
   useEffect(() => {
@@ -904,13 +941,17 @@ export default function SalesSummaryPage({ apiBaseUrl, authToken, authUser }) {
                   const todayDate = dateFromIsoDateInput(todayKey);
                   if (!todayDate) return;
                   setEndDate(todayKey);
-                  setStartDate(formatIsoDateInput(addDays(todayDate, -(days - 1))));
+                  setStartDate(
+                    formatIsoDateInput(addDays(todayDate, -(days - 1))),
+                  );
                   return;
                 }
                 setStartDate(formatIsoDateInput(addDays(clamped.start, days)));
                 setEndDate(candidateEndKey);
               }}
-              disabled={isLoading || (todayKey && endDate && endDate >= todayKey)}
+              disabled={
+                isLoading || (todayKey && endDate && endDate >= todayKey)
+              }
             >
               {">"}
             </button>
@@ -948,21 +989,36 @@ export default function SalesSummaryPage({ apiBaseUrl, authToken, authUser }) {
           </div>
 
           <div className="salesSummaryFiltersRight">
-            <div className="salesSummaryRangeLabels" aria-label="Current and previous range">
-              <div className="salesSummaryRangeLabel" title={rangeLabels.current}>
+            <div
+              className="salesSummaryRangeLabels"
+              aria-label="Current and previous range"
+            >
+              <div
+                className="salesSummaryRangeLabel"
+                title={rangeLabels.current}
+              >
                 <span className="salesSummaryRangeLabelTitle">Current</span>
-                <span className="salesSummaryRangeLabelValue">{rangeLabels.current}</span>
+                <span className="salesSummaryRangeLabelValue">
+                  {rangeLabels.current}
+                </span>
               </div>
-              <div className="salesSummaryRangeLabel" title={rangeLabels.previous}>
+              <div
+                className="salesSummaryRangeLabel"
+                title={rangeLabels.previous}
+              >
                 <span className="salesSummaryRangeLabelTitle">Previous</span>
-                <span className="salesSummaryRangeLabelValue">{rangeLabels.previous}</span>
+                <span className="salesSummaryRangeLabelValue">
+                  {rangeLabels.previous}
+                </span>
               </div>
             </div>
           </div>
         </div>
       </div>
 
-      {error ? <div className="authError salesSummaryError">{error}</div> : null}
+      {error ? (
+        <div className="authError salesSummaryError">{error}</div>
+      ) : null}
       {isDemoData ? (
         <div className="salesSummaryHint">
           Demo data is generated locally to preview the layout.
@@ -984,7 +1040,9 @@ export default function SalesSummaryPage({ apiBaseUrl, authToken, authUser }) {
           return (
             <div key={kpi.key} className="card salesSummaryKpiCard">
               <div className="salesSummaryKpiLabel">{kpi.label}</div>
-              <div className="salesSummaryKpiValue">{formatMoney(kpi.current)}</div>
+              <div className="salesSummaryKpiValue">
+                {formatMoney(kpi.current)}
+              </div>
               <div
                 className={`salesSummaryKpiDelta ${isPositive ? "salesSummaryKpiDeltaUp" : "salesSummaryKpiDeltaDown"}`}
               >
@@ -1074,7 +1132,9 @@ export default function SalesSummaryPage({ apiBaseUrl, authToken, authUser }) {
               ) : (
                 pagedRows.map((r) => (
                   <tr key={r.dayKey}>
-                    <td className="salesSummaryColDate">{formatShortDate(r.dayKey)}</td>
+                    <td className="salesSummaryColDate">
+                      {formatShortDate(r.dayKey)}
+                    </td>
                     <td className="colMoney">{formatMoney(r.grossSales)}</td>
                     <td className="colMoney">{formatMoney(r.refunds)}</td>
                     <td className="colMoney">{formatMoney(r.discounts)}</td>
