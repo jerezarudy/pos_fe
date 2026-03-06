@@ -3,13 +3,17 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   buildQueryString,
   getActorHeaders,
+  getAuthUserRole,
   getFetchCredentials,
   getReportStoreId,
   parsePagedResponse,
   readLocalStorage,
   safeParseList,
   toPositiveInt,
+  writeLocalStorage,
 } from "../utils/common.js";
+
+const STORES_STORAGE_KEY = "pos.stores.v1";
 
 const moneyFormatter = new Intl.NumberFormat("en-PH", {
   style: "currency",
@@ -59,6 +63,26 @@ function dateFromIsoDateInput(value) {
   if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d))
     return null;
   return new Date(y, m - 1, d);
+}
+
+function parseTimeInput(value, fallback = { h: 0, m: 0 }) {
+  const raw = String(value || "").trim();
+  const match = /^(\d{1,2}):(\d{2})$/.exec(raw);
+  if (!match) return fallback;
+  const h = Number(match[1]);
+  const m = Number(match[2]);
+  if (!Number.isFinite(h) || !Number.isFinite(m)) return fallback;
+  if (h < 0 || h > 23) return fallback;
+  if (m < 0 || m > 59) return fallback;
+  return { h, m };
+}
+
+function withLocalTime(date, timeValue, fallbackTime) {
+  if (!(date instanceof Date) || Number.isNaN(date.getTime())) return null;
+  const next = new Date(date);
+  const { h, m } = parseTimeInput(timeValue, fallbackTime);
+  next.setHours(h, m, 0, 0);
+  return next;
 }
 
 function addDays(date, deltaDays) {
@@ -352,7 +376,7 @@ function pctChange(current, previous) {
   return ((a - b) / Math.abs(b)) * 100;
 }
 
-function generateDemoSales({ startKey, endKey }) {
+function _generateDemoSales({ startKey, endKey }) {
   const start = new Date(startKey);
   const end = new Date(endKey);
   const clamped = clampDateRange({ start, end });
@@ -380,6 +404,26 @@ function generateDemoSales({ startKey, endKey }) {
       grossProfit,
     };
   });
+}
+
+function extractStoresList(payload) {
+  if (Array.isArray(payload)) return payload;
+  if (Array.isArray(payload?.data)) return payload.data;
+  if (Array.isArray(payload?.stores)) return payload.stores;
+  if (Array.isArray(payload?.data?.stores)) return payload.data.stores;
+  return [];
+}
+
+function toUiStore(apiStore) {
+  if (!apiStore || typeof apiStore !== "object") return null;
+  const id =
+    apiStore.id ??
+    apiStore._id ??
+    apiStore.storeId ??
+    apiStore.uuid ??
+    (apiStore.name ? `name:${apiStore.name}` : null);
+  if (!id) return null;
+  return { id: String(id), name: String(apiStore.name ?? "") };
 }
 
 function MiniLineChart({ labels, values, height = 240 }) {
@@ -533,7 +577,10 @@ function MiniLineChart({ labels, values, height = 240 }) {
 }
 
 export default function SalesSummaryPage({ apiBaseUrl, authToken, authUser }) {
-  const storeId = useMemo(() => getReportStoreId(authUser), [authUser]);
+  const authRole = useMemo(() => getAuthUserRole(authUser), [authUser]);
+  const canPickStore = authRole === "admin" || authRole === "owner";
+  const assignedStoreId = useMemo(() => getReportStoreId(authUser), [authUser]);
+  const [storeId, setStoreId] = useState(() => assignedStoreId);
   const todayKey = useMemo(() => formatIsoDateInput(new Date()), []);
 
   const [startDate, setStartDate] = useState(() => {
@@ -543,6 +590,8 @@ export default function SalesSummaryPage({ apiBaseUrl, authToken, authUser }) {
   const [endDate, setEndDate] = useState(() => formatIsoDateInput(new Date()));
 
   const [dayPart, setDayPart] = useState("all");
+  const [startTime, setStartTime] = useState("00:00");
+  const [endTime, setEndTime] = useState("23:59");
   const [employeeId, setEmployeeId] = useState("all");
   const [area, setArea] = useState("grossSales");
   const [granularity, setGranularity] = useState("day");
@@ -556,7 +605,71 @@ export default function SalesSummaryPage({ apiBaseUrl, authToken, authUser }) {
   const [sales, setSales] = useState([]);
   const [employees, setEmployees] = useState([]);
 
+  const [stores, setStores] = useState(() => {
+    return safeParseList(readLocalStorage(STORES_STORAGE_KEY, ""))
+      .map(toUiStore)
+      .filter(Boolean);
+  });
+  const [isStoresLoading, setIsStoresLoading] = useState(false);
+
   const lastFetchId = useRef(0);
+
+  useEffect(() => {
+    if (dayPart !== "all") return;
+    if (startTime !== "00:00") setStartTime("00:00");
+    if (endTime !== "23:59") setEndTime("23:59");
+  }, [dayPart, endTime, startTime]);
+
+  const timeBounds = useMemo(() => {
+    if (dayPart === "all") return null;
+
+    const start = dateFromIsoDateInput(startDate);
+    const end = dateFromIsoDateInput(endDate);
+    const clamped = clampDateRange({ start, end });
+    if (!clamped.start || !clamped.end) return null;
+
+    const from = withLocalTime(clamped.start, startTime, { h: 0, m: 0 });
+    const to = withLocalTime(clamped.end, endTime, { h: 23, m: 59 });
+    if (!from || !to) return null;
+
+    if (from <= to) return { from, to };
+    return { from: to, to: from };
+  }, [dayPart, endDate, endTime, startDate, startTime]);
+
+  const timeFilteredSales = useMemo(() => {
+    if (!timeBounds) return sales;
+    return sales.filter((s) => {
+      const dt = new Date(s?.createdAt ?? "");
+      if (Number.isNaN(dt.getTime())) return false;
+      return dt >= timeBounds.from && dt <= timeBounds.to;
+    });
+  }, [sales, timeBounds]);
+
+  const storeOptions = useMemo(() => {
+    const map = new Map();
+    for (const s of stores) {
+      if (!s?.id) continue;
+      map.set(String(s.id), { id: String(s.id), name: String(s.name ?? "") });
+    }
+
+    const active = String(storeId || "").trim();
+    if (active && !map.has(active)) {
+      map.set(active, { id: active, name: active });
+    }
+
+    return Array.from(map.values()).sort((a, b) =>
+      String(a.name || a.id).localeCompare(String(b.name || b.id), undefined, {
+        sensitivity: "base",
+      }),
+    );
+  }, [storeId, stores]);
+
+  const visibleStoreOptions = useMemo(() => {
+    if (canPickStore) return storeOptions;
+    const active = String(storeId || "").trim();
+    if (!active) return [];
+    return storeOptions.filter((s) => String(s.id) === active);
+  }, [canPickStore, storeId, storeOptions]);
 
   const getAuthHeaders = useCallback(() => {
     const headers = { "Content-Type": "application/json" };
@@ -592,6 +705,48 @@ export default function SalesSummaryPage({ apiBaseUrl, authToken, authUser }) {
     },
     [apiBaseUrl, getAuthHeaders],
   );
+
+  useEffect(() => {
+    writeLocalStorage(STORES_STORAGE_KEY, JSON.stringify(stores));
+  }, [stores]);
+
+  useEffect(() => {
+    if (!canPickStore) {
+      setStoreId(assignedStoreId);
+      return;
+    }
+    if (authRole !== "admin" && assignedStoreId && !storeId) {
+      setStoreId(assignedStoreId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [assignedStoreId, authRole, canPickStore]);
+
+  useEffect(() => {
+    if (!apiBaseUrl) return;
+    let cancelled = false;
+
+    async function loadStores() {
+      setIsStoresLoading(true);
+      try {
+        const qs = buildQueryString({ page: 1, limit: 200 });
+        const payload = await apiRequest(`/stores${qs}`);
+        const paged = parsePagedResponse(payload, { page: 1, limit: 200 });
+        const apiStores = extractStoresList({ ...payload, data: paged.data });
+        const ui = apiStores.map(toUiStore).filter(Boolean);
+        if (!cancelled && ui.length) setStores(ui);
+      } catch {
+        // optional: report can still load without stores list
+      } finally {
+        if (!cancelled) setIsStoresLoading(false);
+      }
+    }
+
+    loadStores();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [apiRequest]);
 
   const fetchAllPages = useCallback(
     async (basePath, { maxPages = 12 } = {}) => {
@@ -699,7 +854,7 @@ export default function SalesSummaryPage({ apiBaseUrl, authToken, authUser }) {
         setEmployees(employeeOptions);
       } catch (e) {
         if (fetchId !== lastFetchId.current) return;
-        const message =
+        const _message =
           e instanceof Error ? e.message : "Failed to load sales summary.";
         // setError(`${message} (Showing demo data)`);
         setIsDemoData(false);
@@ -739,8 +894,8 @@ export default function SalesSummaryPage({ apiBaseUrl, authToken, authUser }) {
       listDayKeysInRange(currentRange.prevStart, currentRange.prevEnd),
     );
 
-    const currentSales = sales.filter((s) => currentKeys.has(s.dayKey));
-    const prevSales = sales.filter((s) => prevKeys.has(s.dayKey));
+    const currentSales = timeFilteredSales.filter((s) => currentKeys.has(s.dayKey));
+    const prevSales = timeFilteredSales.filter((s) => prevKeys.has(s.dayKey));
 
     const aggregated = aggregateByDay(currentSales);
     const dayKeys = [...currentKeys].sort((a, b) => a.localeCompare(b));
@@ -809,7 +964,7 @@ export default function SalesSummaryPage({ apiBaseUrl, authToken, authUser }) {
       kpis: kpiList,
       chart: { labels: chartLabels, values: chartValues },
     };
-  }, [area, currentRange, sales]);
+  }, [area, currentRange, timeFilteredSales]);
 
   const totalPages = useMemo(() => {
     if (!tableRows.length) return 1;
@@ -966,7 +1121,32 @@ export default function SalesSummaryPage({ apiBaseUrl, authToken, authUser }) {
               disabled={isLoading}
             >
               <option value="all">All day</option>
+              <option value="custom">Custom time</option>
             </select>
+          </div>
+
+          <div className="salesSummaryFilterGroup" aria-label="Time range">
+            <div className="salesSummaryRangeInputs">
+              <input
+                className="salesSummaryDateInput"
+                type="time"
+                value={startTime}
+                onChange={(e) => setStartTime(e.target.value)}
+                aria-label="Start time"
+                disabled={isLoading || dayPart === "all"}
+              />
+              <span className="salesSummaryRangeDash" aria-hidden="true">
+                --
+              </span>
+              <input
+                className="salesSummaryDateInput"
+                type="time"
+                value={endTime}
+                onChange={(e) => setEndTime(e.target.value)}
+                aria-label="End time"
+                disabled={isLoading || dayPart === "all"}
+              />
+            </div>
           </div>
 
           <div className="salesSummaryFilterGroup">
@@ -983,6 +1163,29 @@ export default function SalesSummaryPage({ apiBaseUrl, authToken, authUser }) {
               {employees.map((e) => (
                 <option key={e.id} value={e.id}>
                   {e.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="salesSummaryFilterGroup">
+            <select
+              className="select"
+              value={storeId}
+              onChange={(e) => {
+                setStoreId(e.target.value);
+                if (error) setError("");
+              }}
+              aria-label="Store filter"
+              disabled={isLoading || isStoresLoading || !canPickStore}
+            >
+              {canPickStore ? <option value="">All stores</option> : null}
+              {!canPickStore && !storeId ? (
+                <option value="">No store assigned</option>
+              ) : null}
+              {visibleStoreOptions.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name || s.id}
                 </option>
               ))}
             </select>
@@ -1196,7 +1399,7 @@ export default function SalesSummaryPage({ apiBaseUrl, authToken, authUser }) {
         </div>
       </div>
 
-      {dayPart !== "all" || granularity !== "day" ? (
+      {granularity !== "day" ? (
         <div className="salesSummaryHint">
           Some filters are placeholders and may require backend support.
         </div>

@@ -3,11 +3,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   buildQueryString,
   getActorHeaders,
+  getAuthUserRole,
   getFetchCredentials,
   getReportStoreId,
   parsePagedResponse,
   toPositiveInt,
 } from "../utils/common.js";
+import { makeStoreOptions, useStoresList } from "../utils/stores.js";
 
 const moneyFormatter = new Intl.NumberFormat("en-PH", {
   style: "currency",
@@ -133,7 +135,10 @@ function generateDemoRows() {
 }
 
 export default function SalesByEmployeePage({ apiBaseUrl, authToken, authUser }) {
+  const authRole = useMemo(() => getAuthUserRole(authUser), [authUser]);
+  const canPickStore = authRole === "admin" || authRole === "owner";
   const reportStoreId = useMemo(() => getReportStoreId(authUser), [authUser]);
+  const [storeId, setStoreId] = useState(() => reportStoreId);
   const todayKey = useMemo(() => formatIsoDateInput(new Date()), []);
   const [startDate, setStartDate] = useState(() => {
     const end = new Date();
@@ -191,6 +196,30 @@ export default function SalesByEmployeePage({ apiBaseUrl, authToken, authUser })
     [apiBaseUrl, getAuthHeaders],
   );
 
+  const { stores, isStoresLoading } = useStoresList({ apiBaseUrl, apiRequest });
+
+  const storeOptions = useMemo(() => {
+    return makeStoreOptions({ stores, activeStoreId: storeId });
+  }, [storeId, stores]);
+
+  const visibleStoreOptions = useMemo(() => {
+    if (canPickStore) return storeOptions;
+    const active = String(storeId || "").trim();
+    if (!active) return [];
+    return storeOptions.filter((s) => String(s.id) === active);
+  }, [canPickStore, storeId, storeOptions]);
+
+  useEffect(() => {
+    if (!canPickStore) {
+      setStoreId(reportStoreId);
+      return;
+    }
+    if (authRole !== "admin" && reportStoreId && !storeId) {
+      setStoreId(reportStoreId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authRole, canPickStore, reportStoreId]);
+
   useEffect(() => {
     const start = new Date(startDate);
     const end = new Date(endDate);
@@ -215,7 +244,7 @@ export default function SalesByEmployeePage({ apiBaseUrl, authToken, authUser })
         const baseParams = {
           from: formatIsoDateInput(clamped.start),
           to: formatIsoDateInput(clamped.end),
-          storeId: reportStoreId || undefined,
+          storeId: storeId || undefined,
           page: 1,
           limit: 1000,
         };
@@ -303,7 +332,7 @@ export default function SalesByEmployeePage({ apiBaseUrl, authToken, authUser })
         if (fetchId === lastFetchId.current) setIsLoading(false);
       }
     })();
-  }, [apiRequest, employeeId, endDate, reportStoreId, startDate]);
+  }, [apiRequest, employeeId, endDate, startDate, storeId]);
 
   const totalPages = useMemo(() => {
     if (!rows.length) return 1;
@@ -464,6 +493,29 @@ export default function SalesByEmployeePage({ apiBaseUrl, authToken, authUser })
               {employees.map((e) => (
                 <option key={e.id} value={e.id}>
                   {e.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="salesSummaryFilterGroup">
+            <select
+              className="select"
+              value={storeId}
+              onChange={(e) => {
+                setStoreId(e.target.value);
+                if (error) setError("");
+              }}
+              aria-label="Store filter"
+              disabled={isLoading || isStoresLoading || !canPickStore}
+            >
+              {canPickStore ? <option value="">All stores</option> : null}
+              {!canPickStore && !storeId ? (
+                <option value="">No store assigned</option>
+              ) : null}
+              {visibleStoreOptions.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name || s.id}
                 </option>
               ))}
             </select>

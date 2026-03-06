@@ -3,11 +3,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   buildQueryString,
   getActorHeaders,
+  getAuthUserRole,
   getFetchCredentials,
   getReportStoreId,
   parsePagedResponse,
   toPositiveInt,
 } from "../utils/common.js";
+import { makeStoreOptions, useStoresList } from "../utils/stores.js";
 
 const moneyFormatter = new Intl.NumberFormat("en-PH", {
   style: "currency",
@@ -82,6 +84,43 @@ function listDayKeysInRange(start, end) {
   return keys;
 }
 
+function normalizeBucketKeyToRange(value, rangeKeys, idx, yearMin, yearMax) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return rangeKeys?.[idx] ?? "";
+
+  if (/^\\d{4}-\\d{2}-\\d{2}$/.test(raw)) return raw;
+
+  const isoMatch = /\\d{4}-\\d{2}-\\d{2}/.exec(raw);
+  if (isoMatch) return isoMatch[0];
+
+  const n = Number(raw);
+  if (Number.isFinite(n) && rangeKeys?.[idx]) return rangeKeys[idx];
+
+  const dt = new Date(raw);
+  if (!Number.isNaN(dt.getTime())) {
+    const y = dt.getFullYear();
+    if (typeof yearMin === "number" && typeof yearMax === "number") {
+      if (y < yearMin || y > yearMax) return rangeKeys?.[idx] ?? "";
+    }
+    return formatIsoDateInput(dt);
+  }
+
+  return rangeKeys?.[idx] ?? raw;
+}
+
+function getBucketKey(bucket, rangeKeys, idx, yearMin, yearMax) {
+  if (bucket && typeof bucket === "object") {
+    return normalizeBucketKeyToRange(
+      bucket.bucket ?? bucket.date ?? bucket.label ?? bucket.key ?? "",
+      rangeKeys,
+      idx,
+      yearMin,
+      yearMax,
+    );
+  }
+  return normalizeBucketKeyToRange(bucket, rangeKeys, idx, yearMin, yearMax);
+}
+
 function normalizeNumber(value) {
   if (typeof value === "number") return Number.isFinite(value) ? value : null;
   if (value == null || value === "") return null;
@@ -139,40 +178,88 @@ const ITEM_CHART_PADDING_RIGHT = 20;
 const ITEM_CHART_PADDING_TOP = 18;
 const ITEM_CHART_PADDING_BOTTOM = 34;
 
-function ItemLineChart({ labels, values, height = 220 }) {
-  const points = useMemo(() => {
-    const safeValues = values.map((v) => (Number.isFinite(v) ? v : 0));
-    const max = Math.max(0, ...safeValues);
-    const min = Math.min(0, ...safeValues);
-    const span = max - min || 1;
-    const innerW =
-      ITEM_CHART_WIDTH - ITEM_CHART_PADDING_LEFT - ITEM_CHART_PADDING_RIGHT;
-    const innerH = height - ITEM_CHART_PADDING_TOP - ITEM_CHART_PADDING_BOTTOM;
+const ITEM_LINE_COLORS = [
+  "#60A5FA", // blue
+  "#34D399", // green
+  "#FBBF24", // amber
+  "#F87171", // red
+  "#A78BFA", // purple
+  "#22D3EE", // cyan
+  "#FB7185", // rose
+  "#F97316", // orange
+  "#4ADE80", // emerald
+  "#38BDF8", // sky
+];
 
-    return safeValues.map((v, i) => {
-      const x =
-        ITEM_CHART_PADDING_LEFT +
-        (labels.length <= 1 ? innerW / 2 : (i / (labels.length - 1)) * innerW);
-      const y = ITEM_CHART_PADDING_TOP + (1 - (v - min) / span) * innerH;
-      return { x, y, v };
-    });
-  }, [height, labels.length, values]);
+function hashStringToInt(value) {
+  const s = String(value ?? "");
+  let hash = 2166136261;
+  for (let i = 0; i < s.length; i++) {
+    hash ^= s.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
 
-  const path = useMemo(() => {
-    if (!points.length) return "";
-    return points
-      .map((p, idx) => `${idx ? "L" : "M"} ${p.x.toFixed(2)} ${p.y.toFixed(2)}`)
-      .join(" ");
-  }, [points]);
+function colorForItemId(itemId) {
+  const idx = hashStringToInt(itemId) % ITEM_LINE_COLORS.length;
+  return ITEM_LINE_COLORS[idx];
+}
+
+function ItemLineChart({ labels, series, selectedId, height = 220 }) {
+  const safeSeries = useMemo(() => {
+    return (Array.isArray(series) ? series : [])
+      .map((s) => {
+        if (!s || typeof s !== "object") return null;
+        const id = String(s.id ?? "");
+        const name = String(s.name ?? id);
+        const values = Array.isArray(s.values) ? s.values : [];
+        const safeValues = values.map((v) => (Number.isFinite(v) ? v : 0));
+        const color = String(s.color || colorForItemId(id));
+        return { id, name, color, values: safeValues };
+      })
+      .filter(Boolean);
+  }, [series]);
 
   const yTicks = useMemo(() => {
-    const safeValues = values.map((v) => (Number.isFinite(v) ? v : 0));
-    const max = Math.max(0, ...safeValues);
+    const all = [];
+    for (const s of safeSeries) all.push(...s.values);
+    const max = Math.max(0, ...(all.length ? all : [0]));
     const steps = 4;
     const ticks = [];
     for (let i = 0; i <= steps; i++) ticks.push((max * i) / steps);
     return ticks;
-  }, [values]);
+  }, [safeSeries]);
+
+  const paths = useMemo(() => {
+    const innerW =
+      ITEM_CHART_WIDTH - ITEM_CHART_PADDING_LEFT - ITEM_CHART_PADDING_RIGHT;
+    const innerH = height - ITEM_CHART_PADDING_TOP - ITEM_CHART_PADDING_BOTTOM;
+
+    const maxTick = yTicks[yTicks.length - 1] || 1;
+    const span = maxTick || 1;
+
+    return safeSeries.map((s) => {
+      const points = s.values.map((v, i) => {
+        const x =
+          ITEM_CHART_PADDING_LEFT +
+          (labels.length <= 1 ? innerW / 2 : (i / (labels.length - 1)) * innerW);
+        const y = ITEM_CHART_PADDING_TOP + (1 - v / span) * innerH;
+        return { x, y };
+      });
+
+      const d = points.length
+        ? points
+            .map(
+              (p, idx) =>
+                `${idx ? "L" : "M"} ${p.x.toFixed(2)} ${p.y.toFixed(2)}`,
+            )
+            .join(" ")
+        : "";
+
+      return { id: s.id, color: s.color, d };
+    });
+  }, [height, labels, safeSeries, yTicks]);
 
   return (
     <div className="salesByItemChartWrap">
@@ -213,16 +300,22 @@ function ItemLineChart({ labels, values, height = 220 }) {
           );
         })}
 
-        {path ? (
-          <path
-            d={path}
-            fill="none"
-            stroke="#607d8b"
-            strokeWidth="2.4"
-            strokeLinejoin="round"
-            strokeLinecap="round"
-          />
-        ) : null}
+        {paths.map((p) => {
+          if (!p.d) return null;
+          const isSelected = selectedId && String(selectedId) === String(p.id);
+          return (
+            <path
+              key={p.id}
+              d={p.d}
+              fill="none"
+              stroke={p.color}
+              opacity={isSelected ? 1 : 0.55}
+              strokeWidth={isSelected ? 3.2 : 2.2}
+              strokeLinejoin="round"
+              strokeLinecap="round"
+            />
+          );
+        })}
 
         <line
           x1={ITEM_CHART_PADDING_LEFT}
@@ -282,15 +375,15 @@ function generateDemoRows({ startKey, endKey }) {
     { id: "demo:5", name: "test 5", category: "e", cost: 50 },
   ];
 
-  const perDay = new Map();
-  keys.forEach((k, idx) => {
-    const wave = Math.sin(idx * 0.55) * 0.45 + 0.55;
-    const spike = idx % 14 === 0 ? 2.0 : 1;
-    const amount = Math.round(wave * spike * 1200 * 100) / 100;
-    perDay.set(k, amount);
-  });
-
   const rows = items.map((it, idx) => {
+    const perDay = new Map();
+    keys.forEach((k, dayIdx) => {
+      const wave = Math.sin((dayIdx + idx * 3) * 0.5) * 0.45 + 0.55;
+      const spike = (dayIdx + idx) % 13 === 0 ? 2.0 : 1;
+      const base = 900 + idx * 150;
+      const amount = Math.round(wave * spike * base * 100) / 100;
+      perDay.set(k, amount);
+    });
     const qty = 5 + idx * 2;
     const netSales = Math.round((2000 / (idx + 1)) * 100) / 100;
     const costOfGoods = qty * it.cost;
@@ -311,7 +404,10 @@ function generateDemoRows({ startKey, endKey }) {
 }
 
 export default function SalesByItemPage({ apiBaseUrl, authToken, authUser }) {
+  const authRole = useMemo(() => getAuthUserRole(authUser), [authUser]);
+  const canPickStore = authRole === "admin" || authRole === "owner";
   const reportStoreId = useMemo(() => getReportStoreId(authUser), [authUser]);
+  const [storeId, setStoreId] = useState(() => reportStoreId);
   const todayKey = useMemo(() => formatIsoDateInput(new Date()), []);
   const [startDate, setStartDate] = useState(() => {
     const end = new Date();
@@ -372,6 +468,30 @@ export default function SalesByItemPage({ apiBaseUrl, authToken, authUser }) {
     [apiBaseUrl, getAuthHeaders],
   );
 
+  const { stores, isStoresLoading } = useStoresList({ apiBaseUrl, apiRequest });
+
+  const storeOptions = useMemo(() => {
+    return makeStoreOptions({ stores, activeStoreId: storeId });
+  }, [storeId, stores]);
+
+  const visibleStoreOptions = useMemo(() => {
+    if (canPickStore) return storeOptions;
+    const active = String(storeId || "").trim();
+    if (!active) return [];
+    return storeOptions.filter((s) => String(s.id) === active);
+  }, [canPickStore, storeId, storeOptions]);
+
+  useEffect(() => {
+    if (!canPickStore) {
+      setStoreId(reportStoreId);
+      return;
+    }
+    if (authRole !== "admin" && reportStoreId && !storeId) {
+      setStoreId(reportStoreId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authRole, canPickStore, reportStoreId]);
+
   useEffect(() => {
     const start = new Date(startDate);
     const end = new Date(endDate);
@@ -393,10 +513,14 @@ export default function SalesByItemPage({ apiBaseUrl, authToken, authUser }) {
 
     (async () => {
       try {
+        const rangeKeys = listDayKeysInRange(clamped.start, clamped.end);
+        const yearMin = clamped.start.getFullYear() - 1;
+        const yearMax = clamped.end.getFullYear() + 1;
+
         const baseParams = {
           from: formatIsoDateInput(clamped.start),
           to: formatIsoDateInput(clamped.end),
-          storeId: reportStoreId || undefined,
+          storeId: storeId || undefined,
           bucket: "day",
           top: 5,
           page: 1,
@@ -469,17 +593,24 @@ export default function SalesByItemPage({ apiBaseUrl, authToken, authUser }) {
 
             const perDay = new Map();
             if (Array.isArray(r.buckets)) {
-              for (const b of r.buckets) {
-                if (!b || typeof b !== "object") continue;
-                const key = String(b.bucket ?? b.date ?? b.label ?? "").trim();
-                if (!key) continue;
+              r.buckets.forEach((b, idx) => {
+                if (!b || typeof b !== "object") return;
+                const key = getBucketKey(
+                  b.bucket ?? b.date ?? b.label ?? b,
+                  rangeKeys,
+                  idx,
+                  yearMin,
+                  yearMax,
+                );
+                if (!key) return;
                 const value =
                   normalizeNumber(
                     b.netSales ?? b.net_sales ?? b.value ?? b.amount,
+                    b.y,
                   ) ?? 0;
                 perDay.set(key, value);
-              }
-            } else if (Array.isArray(buckets) && seriesByItemId.has(id)) {
+              });
+            } else if (seriesByItemId.has(id)) {
               const s = seriesByItemId.get(id);
               const values =
                 (Array.isArray(s?.values) && s.values) ||
@@ -487,20 +618,43 @@ export default function SalesByItemPage({ apiBaseUrl, authToken, authUser }) {
                 (Array.isArray(s?.points) && s.points) ||
                 null;
               if (Array.isArray(values)) {
-                buckets.forEach((bk, idx) => {
-                  const key = String(bk ?? "").trim();
-                  if (!key) return;
-                  const v = values[idx];
-                  if (v && typeof v === "object") {
+                const looksLikePoints = values.some(
+                  (v) => v && typeof v === "object" && ("x" in v || "bucket" in v || "date" in v),
+                );
+
+                if (looksLikePoints) {
+                  values.forEach((pt, idx) => {
+                    if (!pt || typeof pt !== "object") return;
+                    const key = getBucketKey(
+                      pt.x ?? pt.bucket ?? pt.date ?? pt.label ?? pt.key ?? idx,
+                      rangeKeys,
+                      idx,
+                      yearMin,
+                      yearMax,
+                    );
+                    if (!key) return;
                     const amount =
                       normalizeNumber(
-                        v.netSales ?? v.net_sales ?? v.value ?? v.amount,
+                        pt.netSales ?? pt.net_sales ?? pt.value ?? pt.amount ?? pt.y,
                       ) ?? 0;
                     perDay.set(key, amount);
-                  } else {
-                    perDay.set(key, normalizeNumber(v) ?? 0);
-                  }
-                });
+                  });
+                } else if (Array.isArray(buckets)) {
+                  buckets.forEach((bk, idx) => {
+                    const key = getBucketKey(bk, rangeKeys, idx, yearMin, yearMax);
+                    if (!key) return;
+                    const v = values[idx];
+                    if (v && typeof v === "object") {
+                      const amount =
+                        normalizeNumber(
+                          v.netSales ?? v.net_sales ?? v.value ?? v.amount ?? v.y,
+                        ) ?? 0;
+                      perDay.set(key, amount);
+                    } else {
+                      perDay.set(key, normalizeNumber(v) ?? 0);
+                    }
+                  });
+                }
               }
             }
 
@@ -576,7 +730,7 @@ export default function SalesByItemPage({ apiBaseUrl, authToken, authUser }) {
         if (fetchId === lastFetchId.current) setIsLoading(false);
       }
     })();
-  }, [apiRequest, employeeId, endDate, reportStoreId, startDate]);
+  }, [apiRequest, employeeId, endDate, startDate, storeId]);
 
   const topItems = useMemo(() => rows.slice(0, 5), [rows]);
 
@@ -601,12 +755,20 @@ export default function SalesByItemPage({ apiBaseUrl, authToken, authUser }) {
         month: "short",
       }).format(date);
     });
-    const values = dayKeys.map((k) => {
-      const v = selected?.perDay?.get?.(k);
-      return Number.isFinite(v) ? v : 0;
-    });
-    return { labels, values };
-  }, [dayKeys, selected]);
+    return { labels };
+  }, [dayKeys]);
+
+  const chartSeries = useMemo(() => {
+    return topItems.map((it) => ({
+      id: it.itemId,
+      name: it.itemName,
+      color: colorForItemId(it.itemId),
+      values: dayKeys.map((k) => {
+        const v = it?.perDay?.get?.(k);
+        return Number.isFinite(v) ? v : 0;
+      }),
+    }));
+  }, [dayKeys, topItems]);
 
   const totalPages = useMemo(() => {
     if (!rows.length) return 1;
@@ -778,6 +940,29 @@ export default function SalesByItemPage({ apiBaseUrl, authToken, authUser }) {
             </select>
           </div>
 
+          <div className="salesSummaryFilterGroup">
+            <select
+              className="select"
+              value={storeId}
+              onChange={(e) => {
+                setStoreId(e.target.value);
+                if (error) setError("");
+              }}
+              aria-label="Store filter"
+              disabled={isLoading || isStoresLoading || !canPickStore}
+            >
+              {canPickStore ? <option value="">All stores</option> : null}
+              {!canPickStore && !storeId ? (
+                <option value="">No store assigned</option>
+              ) : null}
+              {visibleStoreOptions.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name || s.id}
+                </option>
+              ))}
+            </select>
+          </div>
+
           <div className="salesSummaryFiltersRight">
             <div className="salesByItemRangeMeta" title={rangeLabel}>
               {rangeLabel}
@@ -813,7 +998,11 @@ export default function SalesByItemPage({ apiBaseUrl, authToken, authUser }) {
                       className={`salesByItemRow ${active ? "salesByItemRowActive" : ""}`}
                       onClick={() => setSelectedItemId(it.itemId)}
                     >
-                      <span className="salesByItemAvatar" aria-hidden="true" />
+                      <span
+                        className="salesByItemAvatar"
+                        aria-hidden="true"
+                        style={{ background: colorForItemId(it.itemId) }}
+                      />
                       <span className="salesByItemName">{it.itemName}</span>
                       <span className="salesByItemValue">
                         {formatMoney(it.netSales)}
@@ -861,8 +1050,12 @@ export default function SalesByItemPage({ apiBaseUrl, authToken, authUser }) {
             <div className="salesByItemTopChartBody">
               {isLoading ? (
                 <div className="salesSummaryChartLoading">Loading...</div>
-              ) : selected && chart.labels.length ? (
-                <ItemLineChart labels={chart.labels} values={chart.values} />
+              ) : chart.labels.length && chartSeries.length ? (
+                <ItemLineChart
+                  labels={chart.labels}
+                  series={chartSeries}
+                  selectedId={selected?.itemId || ""}
+                />
               ) : (
                 <div className="salesSummaryChartEmpty">
                   No data in this range.

@@ -1,11 +1,20 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
+  buildQueryString,
   getActorHeaders,
+  getAuthUserRole,
   getFetchCredentials,
   loadCategoriesFromStorage,
   loadCategoryNamesFromStorage,
+  parsePagedResponse,
+  readLocalStorage,
+  resolveStoreId,
+  safeParseList,
+  writeLocalStorage,
 } from "../utils/common.js";
+
+const STORES_STORAGE_KEY = "pos.stores.v1";
 
 function toNumberOrNull(value) {
   if (value == null || value === "") return null;
@@ -18,6 +27,26 @@ function toIntOrNull(value) {
   const n = Number(value);
   if (!Number.isFinite(n)) return null;
   return Math.trunc(n);
+}
+
+function extractStoresList(payload) {
+  if (Array.isArray(payload)) return payload;
+  if (Array.isArray(payload?.data)) return payload.data;
+  if (Array.isArray(payload?.stores)) return payload.stores;
+  if (Array.isArray(payload?.data?.stores)) return payload.data.stores;
+  return [];
+}
+
+function toUiStore(apiStore) {
+  if (!apiStore || typeof apiStore !== "object") return null;
+  const id =
+    apiStore.id ??
+    apiStore._id ??
+    apiStore.storeId ??
+    apiStore.uuid ??
+    (apiStore.name ? `name:${apiStore.name}` : null);
+  if (!id) return null;
+  return { id: String(id), name: String(apiStore.name ?? "") };
 }
 
 export default function CreateItemPage({
@@ -38,6 +67,7 @@ export default function CreateItemPage({
   const [cost, setCost] = useState("");
   const [sku, setSku] = useState("");
   const [barcode, setBarcode] = useState("");
+  const [storeId, setStoreId] = useState(() => resolveStoreId(authUser));
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -45,6 +75,17 @@ export default function CreateItemPage({
   // Inventory (intentionally excludes "Composite item", Variants, and POS representation sections)
   const [trackStock, setTrackStock] = useState(false);
   const [inStock, setInStock] = useState("");
+
+  const authRole = useMemo(() => getAuthUserRole(authUser), [authUser]);
+  const canPickStore = authRole === "admin" || authRole === "owner";
+  const assignedStoreId = useMemo(() => resolveStoreId(authUser), [authUser]);
+
+  const [stores, setStores] = useState(() => {
+    return safeParseList(readLocalStorage(STORES_STORAGE_KEY, ""))
+      .map(toUiStore)
+      .filter(Boolean);
+  });
+  const [isStoresLoading, setIsStoresLoading] = useState(false);
 
   const categories = useMemo(() => {
     const unique = new Set();
@@ -61,6 +102,25 @@ export default function CreateItemPage({
     const match = list.find((c) => c?.name === selected);
     return match?.id ?? null;
   }, [category]);
+
+  const storeOptions = useMemo(() => {
+    const map = new Map();
+    for (const s of stores) {
+      if (!s?.id) continue;
+      map.set(String(s.id), { id: String(s.id), name: String(s.name ?? "") });
+    }
+
+    const active = String(storeId || "").trim();
+    if (active && !map.has(active)) {
+      map.set(active, { id: active, name: active });
+    }
+
+    return Array.from(map.values()).sort((a, b) =>
+      String(a.name || a.id).localeCompare(String(b.name || b.id), undefined, {
+        sensitivity: "base",
+      }),
+    );
+  }, [storeId, stores]);
 
   function getAuthHeaders() {
     const headers = { "Content-Type": "application/json" };
@@ -93,6 +153,54 @@ export default function CreateItemPage({
     }
     return payload;
   }
+
+  useEffect(() => {
+    writeLocalStorage(STORES_STORAGE_KEY, JSON.stringify(stores));
+  }, [stores]);
+
+  useEffect(() => {
+    if (itemId) return;
+    if (storeId) return;
+    if (!assignedStoreId) return;
+    setStoreId(assignedStoreId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [assignedStoreId, itemId]);
+
+  useEffect(() => {
+    if (!apiBaseUrl) return;
+    let cancelled = false;
+
+    async function loadStores() {
+      setIsStoresLoading(true);
+      try {
+        const qs = buildQueryString({ page: 1, limit: 200 });
+        const payload = await apiRequest(`/stores${qs}`);
+        const paged = parsePagedResponse(payload, { page: 1, limit: 200 });
+        const apiStores = extractStoresList({ ...payload, data: paged.data });
+        const ui = apiStores.map(toUiStore).filter(Boolean);
+        if (!cancelled && ui.length) setStores(ui);
+      } catch {
+        // optional: item create/edit can still work without stores list (if backend assigns store)
+      } finally {
+        if (!cancelled) setIsStoresLoading(false);
+      }
+    }
+
+    loadStores();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [apiBaseUrl, authToken]);
+
+  useEffect(() => {
+    if (itemId) return;
+    if (storeId) return;
+    if (assignedStoreId) return;
+    if (storeOptions.length !== 1) return;
+    setStoreId(storeOptions[0].id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [assignedStoreId, itemId, storeOptions.length]);
 
   function extractSku(payload) {
     if (payload == null) return null;
@@ -202,6 +310,21 @@ export default function CreateItemPage({
         setSku(String(data.sku ?? ""));
         setBarcode(String(data.barcode ?? ""));
 
+        const loadedStoreIdRaw =
+          data.storeId ??
+          data.store_id ??
+          data.assignedStoreId ??
+          data.assigned_store_id ??
+          data.store?.id ??
+          data.store?._id ??
+          data.store?.storeId ??
+          "";
+        const loadedStoreId =
+          typeof loadedStoreIdRaw === "string" || typeof loadedStoreIdRaw === "number"
+            ? String(loadedStoreIdRaw)
+            : "";
+        if (loadedStoreId) setStoreId(loadedStoreId);
+
         const track = Boolean(data.trackStock ?? data.track_stock ?? true);
         setTrackStock(track);
         setInStock(data.inStock == null ? "" : String(data.inStock));
@@ -236,6 +359,12 @@ export default function CreateItemPage({
       const skuValue = sku.trim();
       const skuNumber = toIntOrNull(skuValue);
       const categoryName = String(category || "").trim();
+      const resolvedStoreId = String(storeId || assignedStoreId || "").trim();
+      if (!resolvedStoreId) {
+        setError("Store is required.");
+        return;
+      }
+
       const payload = {
         name: name.trim(),
         category: categoryName
@@ -249,6 +378,7 @@ export default function CreateItemPage({
         sku: skuNumber ?? (skuValue || ""),
         barcode: barcode || "",
         trackStock: Boolean(trackStock),
+        storeId: resolvedStoreId,
       };
 
       if (trackStock) {
@@ -319,6 +449,33 @@ export default function CreateItemPage({
                 </select>
               </label>
             </div>
+
+            <label className="field createItemField">
+              <div className="fieldLabel">Store</div>
+              <select
+                className="select"
+                value={storeId}
+                onChange={(e) => {
+                  setStoreId(e.target.value);
+                  if (error) setError("");
+                }}
+                disabled={
+                  isLoading ||
+                  isSaving ||
+                  isStoresLoading ||
+                  (Boolean(assignedStoreId) && !canPickStore)
+                }
+              >
+                <option value="">
+                  {isStoresLoading ? "Loading stores..." : "Select store"}
+                </option>
+                {storeOptions.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name || s.id}
+                  </option>
+                ))}
+              </select>
+            </label>
 
             <label className="field createItemField">
               <div className="fieldLabel">Description</div>

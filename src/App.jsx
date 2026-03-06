@@ -18,6 +18,7 @@ import SalesByCategoryPage from "./pages/SalesByCategoryPage.jsx";
 import SalesByEmployeePage from "./pages/SalesByEmployeePage.jsx";
 import SalesByPaymentTypePage from "./pages/SalesByPaymentTypePage.jsx";
 import ReceiptsReportPage from "./pages/ReceiptsReportPage.jsx";
+import EndOfDayCashPage from "./pages/EndOfDayCashPage.jsx";
 import {
   getActorHeaders,
   getAuthUserRole,
@@ -313,12 +314,11 @@ function App() {
 
   const sidebarItems = isCashier
     ? [
-        { type: "link", id: "pos", label: "Sales", Icon: PosIcon },
-        { type: "link", id: "items.itemList", label: "Items", Icon: ItemsIcon },
-        { type: "link", id: "customers", label: "Customers", Icon: UsersIcon },
-        { type: "link", id: "settings", label: "Settings", Icon: SettingsIcon, hidden: true },
-        { type: "link", id: "logout", label: "Logout", Icon: SettingsIcon },
-      ]
+         { type: "link", id: "pos", label: "Sales", Icon: PosIcon },
+         { type: "link", id: "customers", label: "Customers", Icon: UsersIcon },
+         { type: "link", id: "settings", label: "Settings", Icon: SettingsIcon, hidden: true },
+         { type: "link", id: "logout", label: "Logout", Icon: SettingsIcon },
+       ]
     : [
         {
           type: "section",
@@ -335,6 +335,7 @@ function App() {
               label: "Sales by payment type",
             },
             { id: "reports.receipts", label: "Receipts" },
+            { id: "reports.endOfDayCash", label: "End of Day Cash" },
             // { id: "reports.salesByModifier", label: "Sales by modifier" },
             { id: "reports.discounts", label: "Discounts", hidden: true },
             { id: "reports.taxes", label: "Taxes", hidden: true },
@@ -555,6 +556,14 @@ function App() {
     if (activePage === "reports.receipts")
       return (
         <ReceiptsReportPage
+          apiBaseUrl={apiBaseUrl}
+          authToken={authToken}
+          authUser={authUser}
+        />
+      );
+    if (activePage === "reports.endOfDayCash")
+      return (
+        <EndOfDayCashPage
           apiBaseUrl={apiBaseUrl}
           authToken={authToken}
           authUser={authUser}

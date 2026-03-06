@@ -41,6 +41,8 @@ function getSortValue(item, key) {
       return item.name ?? "";
     case "category":
       return item.category ?? "";
+    case "store":
+      return item.storeName ?? item.storeId ?? "";
     case "price":
       return item.price;
     case "cost":
@@ -106,11 +108,36 @@ function toUiItem(apiItem, categoryNameById) {
     category = categoryNameById.get(categoryId) || "";
   }
 
+  const storeIdRaw =
+    apiItem.storeId ??
+    apiItem.store_id ??
+    apiItem.assignedStoreId ??
+    apiItem.assigned_store_id ??
+    apiItem.store?.id ??
+    apiItem.store?._id ??
+    apiItem.store?.storeId ??
+    "";
+  const storeId =
+    typeof storeIdRaw === "string" || typeof storeIdRaw === "number"
+      ? String(storeIdRaw)
+      : "";
+
+  const storeNameRaw =
+    apiItem.storeName ??
+    apiItem.store_name ??
+    apiItem.store?.name ??
+    apiItem.store?.storeName ??
+    apiItem.store?.label ??
+    "";
+  const storeName = String(storeNameRaw ?? "").trim();
+
   return {
     id: String(id),
     name: String(apiItem.name ?? ""),
     category,
     categoryId,
+    storeId,
+    storeName,
     price: typeof price === "number" ? price : price == null || price === "" ? null : Number(price),
     cost: typeof cost === "number" ? cost : cost == null || cost === "" ? null : Number(cost),
     inStock:
@@ -201,7 +228,9 @@ export default function ItemListPage({
     if (!q) return list;
 
     return list.filter((item) => {
-      const haystack = `${item?.name ?? ""} ${item?.category ?? ""}`.trim().toLowerCase();
+      const haystack = `${item?.name ?? ""} ${item?.category ?? ""} ${item?.storeName ?? ""}`
+        .trim()
+        .toLowerCase();
       return haystack.includes(q);
     });
   }, [category, items, searchQuery]);
@@ -363,6 +392,15 @@ export default function ItemListPage({
                     Category <span className="sortArrow">{sortArrow("category")}</span>
                   </button>
                 </th>
+                <th className="colStore" aria-sort={ariaSort("store")}>
+                  <button
+                    type="button"
+                    className="thSortBtn"
+                    onClick={() => toggleSort("store")}
+                  >
+                    Store <span className="sortArrow">{sortArrow("store")}</span>
+                  </button>
+                </th>
                 <th className="colMoney" aria-sort={ariaSort("price")}>
                   <button
                     type="button"
@@ -405,7 +443,7 @@ export default function ItemListPage({
             <tbody>
               {sortedItems.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="usersEmpty">
+                  <td colSpan={8} className="usersEmpty">
                     {isLoading ? "Loading…" : "No items found."}
                   </td>
                 </tr>
@@ -415,6 +453,11 @@ export default function ItemListPage({
                     <td className="colName">{item.name}</td>
                     <td className="colCategory">
                       <span className="cellSelect">{item.category || "—"}</span>
+                    </td>
+                    <td className="colStore">
+                      <span className="cellSelect">
+                        {item.storeName || item.storeId || "—"}
+                      </span>
                     </td>
                     <td className="colMoney">{formatMoney(item.price)}</td>
                     <td className="colMoney">{formatMoney(item.cost)}</td>

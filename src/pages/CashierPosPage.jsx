@@ -9,7 +9,9 @@ import {
   readLocalStorage,
   resolveStoreId,
   safeParseList,
+  writeLocalStorage,
 } from "../utils/common.js";
+import { useStoresList } from "../utils/stores.js";
 import { SearchIcon, UsersIcon } from "../icons/index.jsx";
 
 const moneyFormatter = new Intl.NumberFormat("en-PH", {
@@ -246,13 +248,6 @@ export default function CashierPosPage({ apiBaseUrl, authToken, authUser }) {
       : "";
   }, [authUser]);
 
-  const storeName = useMemo(() => {
-    if (!storeId) return "";
-    const stores = safeParseList(readLocalStorage("pos.stores.v1", ""));
-    const match = stores.find((s) => String(s?.id ?? "") === String(storeId));
-    return match?.name ? String(match.name) : "";
-  }, [storeId]);
-
   const [items, setItems] = useState([]);
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
@@ -283,6 +278,8 @@ export default function CashierPosPage({ apiBaseUrl, authToken, authUser }) {
   const [isDiscountsLoading, setIsDiscountsLoading] = useState(false);
   const [selectedDiscountId, setSelectedDiscountId] = useState("");
 
+  const [storeNameOverride, setStoreNameOverride] = useState("");
+
   const authHeaders = useMemo(() => {
     const headers = { "Content-Type": "application/json" };
     if (authToken) headers.Authorization = `Bearer ${authToken}`;
@@ -311,6 +308,63 @@ export default function CashierPosPage({ apiBaseUrl, authToken, authUser }) {
     },
     [apiBaseUrl, authHeaders],
   );
+
+  const { stores: storesList } = useStoresList({ apiBaseUrl, apiRequest });
+
+  const storeName = useMemo(() => {
+    if (!storeId) return "";
+
+    const storeRaw =
+      authUser?.storeName ??
+      authUser?.store_name ??
+      authUser?.store?.name ??
+      authUser?.store?.storeName ??
+      authUser?.store?.label ??
+      "";
+    const fromUser = String(storeRaw ?? "").trim();
+    if (fromUser) return fromUser;
+
+    const match =
+      storesList.find((s) => String(s?.id ?? "") === String(storeId)) ?? null;
+    if (match?.name) return String(match.name);
+
+    const storesFromStorage = safeParseList(readLocalStorage("pos.stores.v1", ""));
+    const fallback = storesFromStorage.find(
+      (s) => String(s?.id ?? "") === String(storeId),
+    );
+    return fallback?.name ? String(fallback.name) : "";
+  }, [authUser, storeId, storesList]);
+
+  useEffect(() => {
+    if (!storeId) return;
+    if (storeName) return;
+    if (storeNameOverride) return;
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const payload = await apiRequest(`/stores/${encodeURIComponent(storeId)}`);
+        const data = payload?.data ?? payload?.store ?? payload;
+        const fetchedName = String(data?.name ?? "").trim();
+        if (!fetchedName) return;
+        if (cancelled) return;
+        setStoreNameOverride(fetchedName);
+
+        const storesFromStorage = safeParseList(readLocalStorage("pos.stores.v1", ""));
+        const next = storesFromStorage.filter(
+          (s) => String(s?.id ?? "") !== String(storeId),
+        );
+        next.push({ id: String(storeId), name: fetchedName });
+        writeLocalStorage("pos.stores.v1", JSON.stringify(next));
+      } catch {
+        // ignore: cashier might not be allowed to fetch stores
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [apiRequest, storeId, storeName, storeNameOverride]);
 
   useEffect(() => {
     let cancelled = false;
@@ -912,13 +966,13 @@ export default function CashierPosPage({ apiBaseUrl, authToken, authUser }) {
 
         <div className="posHeaderMeta">
           <div className="posWelcome">Welcome, {String(name)}</div>
-          {storeId ? (
-            <div className="posStore">
-              Store: {storeName ? `${storeName}` : storeId}
-            </div>
-          ) : (
-            <div className="posStore">Store: Unassigned</div>
-          )}
+           {storeId ? (
+             <div className="posStore">
+               Store: {storeName || storeNameOverride || storeId}
+             </div>
+           ) : (
+             <div className="posStore">Store: Unassigned</div>
+           )}
           <div className="posStore">
             Customer:{" "}
             {selectedCustomer?.name || selectedCustomer?.email || "Walk-in"}
