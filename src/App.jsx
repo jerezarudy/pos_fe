@@ -19,6 +19,7 @@ import SalesByEmployeePage from "./pages/SalesByEmployeePage.jsx";
 import SalesByPaymentTypePage from "./pages/SalesByPaymentTypePage.jsx";
 import ReceiptsReportPage from "./pages/ReceiptsReportPage.jsx";
 import EndOfDayCashPage from "./pages/EndOfDayCashPage.jsx";
+import MonthlySalesPage from "./pages/MonthlySalesPage.jsx";
 import {
   getActorHeaders,
   getAuthUserRole,
@@ -374,6 +375,7 @@ function App() {
             },
             { id: "reports.receipts", label: "Receipts" },
             { id: "reports.endOfDayCash", label: "End of Day Cash" },
+            { id: "reports.monthlySales", label: "Monthly sales" },
             // { id: "reports.salesByModifier", label: "Sales by modifier" },
             { id: "reports.discounts", label: "Discounts", hidden: true },
             { id: "reports.taxes", label: "Taxes", hidden: true },
@@ -629,6 +631,14 @@ function App() {
     if (activePage === "reports.endOfDayCash")
       return (
         <EndOfDayCashPage
+          apiBaseUrl={apiBaseUrl}
+          authToken={authToken}
+          authUser={authUser}
+        />
+      );
+    if (activePage === "reports.monthlySales")
+      return (
+        <MonthlySalesPage
           apiBaseUrl={apiBaseUrl}
           authToken={authToken}
           authUser={authUser}
