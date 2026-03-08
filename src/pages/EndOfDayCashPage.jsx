@@ -123,6 +123,49 @@ function getSaleGrossSales(raw) {
   return derived;
 }
 
+function getSaleNetSales(raw, derivedSubtotal) {
+  if (!raw || typeof raw !== "object") return null;
+  const totals = raw.totals && typeof raw.totals === "object" ? raw.totals : {};
+  const direct =
+    normalizeNumber(totals.amountDue) ??
+    normalizeNumber(totals.total) ??
+    normalizeNumber(raw.amountDue) ??
+    normalizeNumber(raw.total) ??
+    normalizeNumber(raw.netSales) ??
+    normalizeNumber(raw.net_sales) ??
+    null;
+  if (direct != null) return direct;
+
+  const discount =
+    normalizeNumber(totals.discount) ??
+    normalizeNumber(totals.discounts) ??
+    normalizeNumber(raw.discount) ??
+    normalizeNumber(raw.discounts) ??
+    null;
+  if (derivedSubtotal == null) return null;
+  return Math.max(0, derivedSubtotal - (discount || 0));
+}
+
+function getSaleCostOfGoods(raw, costByItemId) {
+  if (!raw || typeof raw !== "object") return 0;
+  const rawItems = Array.isArray(raw.items) ? raw.items : [];
+  if (rawItems.length === 0) return 0;
+  return rawItems.reduce((sum, it) => {
+    if (!it || typeof it !== "object") return sum;
+    const itemId = it.itemId ?? it.item_id ?? it.id ?? it._id ?? null;
+    const qty = toPositiveInt(it.qty ?? it.quantity, 0);
+    if (!itemId || qty <= 0) return sum;
+    const directCost =
+      normalizeNumber(it.cost ?? it.unitCost ?? it.unit_cost ?? it.costPrice ?? it.cost_price) ??
+      null;
+    const lookupCost =
+      directCost != null
+        ? directCost
+        : normalizeNumber(costByItemId?.get?.(String(itemId))) ?? 0;
+    return sum + lookupCost * qty;
+  }, 0);
+}
+
 export default function EndOfDayCashPage({ apiBaseUrl, authToken, authUser }) {
   const todayKey = useMemo(() => formatIsoDateInput(new Date()), []);
   const authRole = useMemo(() => getAuthUserRole(authUser), [authUser]);
@@ -135,6 +178,7 @@ export default function EndOfDayCashPage({ apiBaseUrl, authToken, authUser }) {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
   const [grossSales, setGrossSales] = useState(0);
+  const [grossProfit, setGrossProfit] = useState(0);
 
   const lastFetchId = useRef(0);
 
@@ -238,29 +282,62 @@ export default function EndOfDayCashPage({ apiBaseUrl, authToken, authUser }) {
           limit: 500,
         });
 
-        const rawSales = await fetchAllPages(`/sales${query}`, { maxPages: 12 });
+        const itemsQuery = buildQueryString({
+          limit: 2000,
+          page: 1,
+          storeId: storeId || undefined,
+        });
+
+        const [rawSales, rawItems] = await Promise.all([
+          fetchAllPages(`/sales${query}`, { maxPages: 12 }),
+          apiRequest(`/items${itemsQuery}`).catch(() => null),
+        ]);
+
+        const itemsList = rawItems ? extractSalesList(rawItems) : [];
+        const costByItemId = new Map();
+        for (const it of itemsList) {
+          if (!it || typeof it !== "object") continue;
+          const id = it.id ?? it._id ?? it.itemId ?? it.uuid ?? null;
+          if (!id) continue;
+          const cost = normalizeNumber(it.cost ?? it.unitCost ?? it.unit_cost);
+          if (Number.isFinite(cost)) costByItemId.set(String(id), cost);
+        }
+
         const list = extractSalesList(rawSales);
         const filtered = list.filter((s) => {
           const dt = getSaleCreatedAt(s);
           if (!dt) return false;
           return dt >= bounds.start && dt < bounds.end;
         });
-        const sum = filtered.reduce((acc, s) => acc + (getSaleGrossSales(s) ?? 0), 0);
+        const totals = filtered.reduce(
+          (acc, s) => {
+            const saleGross = getSaleGrossSales(s);
+            const gross = saleGross ?? 0;
+            const net = getSaleNetSales(s, saleGross) ?? 0;
+            const cogs = getSaleCostOfGoods(s, costByItemId) ?? 0;
+            acc.grossSales += gross;
+            acc.grossProfit += Math.max(0, net - cogs);
+            return acc;
+          },
+          { grossSales: 0, grossProfit: 0 },
+        );
 
         if (fetchId !== lastFetchId.current) return;
-        setGrossSales(Math.round(sum * 100) / 100);
+        setGrossSales(Math.round(totals.grossSales * 100) / 100);
+        setGrossProfit(Math.round(totals.grossProfit * 100) / 100);
       } catch (e) {
         if (fetchId !== lastFetchId.current) return;
         setError(e instanceof Error ? e.message : "Failed to load end-of-day cash.");
         setGrossSales(0);
+        setGrossProfit(0);
       } finally {
         if (fetchId === lastFetchId.current) setIsLoading(false);
       }
     })();
-  }, [apiBaseUrl, date, fetchAllPages, storeId]);
+  }, [apiBaseUrl, apiRequest, date, fetchAllPages, storeId]);
 
   return (
-    <div className="page">
+    <div className="page salesSummaryPage">
       <div className="salesSummaryHeaderBar" aria-label="End of Day Cash">
         <div className="salesSummaryHeaderTitle">End of Day Cash</div>
       </div>
@@ -313,6 +390,16 @@ export default function EndOfDayCashPage({ apiBaseUrl, authToken, authUser }) {
           <div className="salesSummaryKpiLabel">Gross sales</div>
           <div className="salesSummaryKpiValue">
             {isLoading ? "--" : formatMoney(grossSales)}
+          </div>
+          <div className="salesSummaryKpiDelta salesSummaryKpiDeltaUp">
+            {isLoading ? "Loading..." : `For ${date || "--"}`}
+          </div>
+        </div>
+
+        <div className="card salesSummaryKpiCard">
+          <div className="salesSummaryKpiLabel">Gross profit</div>
+          <div className="salesSummaryKpiValue">
+            {isLoading ? "--" : formatMoney(grossProfit)}
           </div>
           <div className="salesSummaryKpiDelta salesSummaryKpiDeltaUp">
             {isLoading ? "Loading..." : `For ${date || "--"}`}
