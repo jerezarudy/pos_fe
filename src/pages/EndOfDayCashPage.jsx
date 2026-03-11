@@ -167,6 +167,34 @@ function getSaleNetSales(raw, derivedSubtotal) {
   return Math.max(0, derivedSubtotal - (discount || 0));
 }
 
+function getSaleDiscountAmount(raw, derivedSubtotal) {
+  if (!raw || typeof raw !== "object") return null;
+  const totals = raw.totals && typeof raw.totals === "object" ? raw.totals : {};
+
+  const direct =
+    normalizeNumber(totals.discount) ??
+    normalizeNumber(totals.discounts) ??
+    normalizeNumber(raw.discount) ??
+    normalizeNumber(raw.discounts) ??
+    null;
+  if (direct != null) return Math.max(0, direct);
+
+  const discountLines = Array.isArray(raw.discounts) ? raw.discounts : [];
+  if (discountLines.length) {
+    const sum = discountLines.reduce((acc, d) => {
+      if (!d || typeof d !== "object") return acc;
+      const amount = normalizeNumber(d.amount ?? d.discount ?? d.value ?? d.total) ?? 0;
+      return acc + amount;
+    }, 0);
+    if (Number.isFinite(sum) && sum > 0) return sum;
+  }
+
+  if (derivedSubtotal == null) return null;
+  const net = getSaleNetSales(raw, derivedSubtotal);
+  if (net == null) return null;
+  return Math.max(0, derivedSubtotal - net);
+}
+
 function getSaleCostOfGoods(raw, costByItemId) {
   if (!raw || typeof raw !== "object") return 0;
   const rawItems = Array.isArray(raw.items) ? raw.items : [];
@@ -206,7 +234,8 @@ export default function EndOfDayCashPage({
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
   const [grossSales, setGrossSales] = useState(0);
-  const [grossProfit, setGrossProfit] = useState(0);
+  const [netSales, setNetSales] = useState(0);
+  const [discounts, setDiscounts] = useState(0);
 
   const lastFetchId = useRef(0);
 
@@ -347,22 +376,25 @@ export default function EndOfDayCashPage({
             const saleGross = getSaleGrossSales(s);
             const gross = saleGross ?? 0;
             const net = getSaleNetSales(s, saleGross) ?? 0;
-            const cogs = getSaleCostOfGoods(s, costByItemId) ?? 0;
+            const discount = getSaleDiscountAmount(s, saleGross) ?? 0;
             acc.grossSales += gross;
-            acc.grossProfit += Math.max(0, net - cogs);
+            acc.netSales += net;
+            acc.discounts += Math.max(0, discount);
             return acc;
           },
-          { grossSales: 0, grossProfit: 0 },
+          { grossSales: 0, netSales: 0, discounts: 0 },
         );
 
         if (fetchId !== lastFetchId.current) return;
         setGrossSales(Math.round(totals.grossSales * 100) / 100);
-        setGrossProfit(Math.round(totals.grossProfit * 100) / 100);
+        setNetSales(Math.round(totals.netSales * 100) / 100);
+        setDiscounts(Math.round(totals.discounts * 100) / 100);
       } catch (e) {
         if (fetchId !== lastFetchId.current) return;
         setError(e instanceof Error ? e.message : "Failed to load end-of-day cash.");
         setGrossSales(0);
-        setGrossProfit(0);
+        setNetSales(0);
+        setDiscounts(0);
       } finally {
         if (fetchId === lastFetchId.current) setIsLoading(false);
       }
@@ -432,9 +464,19 @@ export default function EndOfDayCashPage({
         </div>
 
         <div className="card salesSummaryKpiCard">
-          <div className="salesSummaryKpiLabel">Gross profit</div>
+          <div className="salesSummaryKpiLabel">Net sales</div>
           <div className="salesSummaryKpiValue">
-            {isLoading ? "--" : formatMoney(grossProfit)}
+            {isLoading ? "--" : formatMoney(netSales)}
+          </div>
+          <div className="salesSummaryKpiDelta salesSummaryKpiDeltaUp">
+            {isLoading ? "Loading..." : `For ${date || "--"}`}
+          </div>
+        </div>
+
+        <div className="card salesSummaryKpiCard">
+          <div className="salesSummaryKpiLabel">Discounts</div>
+          <div className="salesSummaryKpiValue">
+            {isLoading ? "--" : formatMoney(discounts)}
           </div>
           <div className="salesSummaryKpiDelta salesSummaryKpiDeltaUp">
             {isLoading ? "Loading..." : `For ${date || "--"}`}

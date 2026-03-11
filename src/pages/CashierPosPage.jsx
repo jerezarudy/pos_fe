@@ -84,6 +84,7 @@ function toUiItem(apiItem) {
   if (!id) return null;
 
   const price = apiItem.price ?? null;
+  const cost = apiItem.cost ?? apiItem.unitCost ?? apiItem.unit_cost ?? null;
   const inStockRaw = apiItem.inStock ?? apiItem.stock ?? apiItem.qty ?? null;
   const inStock =
     typeof inStockRaw === "number"
@@ -121,6 +122,12 @@ function toUiItem(apiItem) {
         : price == null || price === ""
           ? null
           : Number(price),
+    cost:
+      typeof cost === "number"
+        ? cost
+        : cost == null || cost === ""
+          ? null
+          : Number(cost),
     trackStock,
     inStock: Number.isFinite(inStock) ? inStock : null,
     storeId:
@@ -675,6 +682,7 @@ export default function CashierPosPage({ apiBaseUrl, authToken, authUser }) {
           id: item.id,
           name: item.name,
           price: item.price ?? 0,
+          cost: item.cost ?? null,
           qty: nextQty,
         },
       };
@@ -714,12 +722,15 @@ export default function CashierPosPage({ apiBaseUrl, authToken, authUser }) {
       .map((line) => {
         const price =
           typeof line.price === "number" ? line.price : Number(line.price);
+        const cost = typeof line.cost === "number" ? line.cost : Number(line.cost);
         const qty = Math.max(0, Math.trunc(Number(line.qty) || 0));
         const unitPrice = Number.isFinite(price) ? price : 0;
+        const unitCost = Number.isFinite(cost) ? cost : null;
         return {
           itemId: line.id,
           name: line.name,
           unitPrice,
+          unitCost,
           qty,
           lineTotal: unitPrice * qty,
         };
@@ -732,6 +743,7 @@ export default function CashierPosPage({ apiBaseUrl, authToken, authUser }) {
         itemId: line.itemId,
         qty: line.qty,
         unitPrice: line.unitPrice,
+        ...(line.unitCost != null ? { unitCost: line.unitCost, cost: line.unitCost } : null),
         name: line.name,
       })),
       discounts: selectedDiscount
