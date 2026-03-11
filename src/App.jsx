@@ -20,6 +20,7 @@ import SalesByPaymentTypePage from "./pages/SalesByPaymentTypePage.jsx";
 import ReceiptsReportPage from "./pages/ReceiptsReportPage.jsx";
 import EndOfDayCashPage from "./pages/EndOfDayCashPage.jsx";
 import MonthlySalesPage from "./pages/MonthlySalesPage.jsx";
+import LowStockItemsPage from "./pages/LowStockItemsPage.jsx";
 import {
   getActorHeaders,
   getAuthUserRole,
@@ -332,6 +333,7 @@ function App() {
       return;
     if (activePage === "cashier.mySales") return;
     if (activePage === "cashier.endOfDayCash") return;
+    if (activePage === "cashier.lowStockItems") return;
     if (activePage === "items.itemList") return;
 
     if (String(activePage || "").startsWith("items.")) {
@@ -360,6 +362,12 @@ function App() {
           label: "End of Day Cash",
           Icon: ReportsIcon,
         },
+        {
+          type: "link",
+          id: "cashier.lowStockItems",
+          label: "Low Stock Items",
+          Icon: ReportsIcon,
+        },
         { type: "link", id: "items.itemList", label: "Items", Icon: ItemsIcon },
         { type: "link", id: "customers", label: "Customers", Icon: UsersIcon },
         { type: "link", id: "settings", label: "Settings", Icon: SettingsIcon, hidden: true },
@@ -381,6 +389,7 @@ function App() {
               label: "Sales by payment type",
             },
             { id: "reports.receipts", label: "Receipts" },
+            { id: "reports.lowStockItems", label: "Low Stock Items" },
             { id: "reports.endOfDayCash", label: "End of Day Cash" },
             { id: "reports.monthlySales", label: "Monthly sales" },
             // { id: "reports.salesByModifier", label: "Sales by modifier" },
@@ -491,6 +500,17 @@ function App() {
           lockedEmployeeId={
             authUser?.id ?? authUser?._id ?? authUser?.userId ?? authUser?.uuid ?? ""
           }
+          hideStoreFilter
+        />
+      );
+    if (activePage === "cashier.lowStockItems")
+      return (
+        <LowStockItemsPage
+          apiBaseUrl={apiBaseUrl}
+          authToken={authToken}
+          authUser={authUser}
+          searchQuery={topbarSearch}
+          lockedStoreId={resolveStoreId(authUser)}
           hideStoreFilter
         />
       );
@@ -646,6 +666,15 @@ function App() {
           apiBaseUrl={apiBaseUrl}
           authToken={authToken}
           authUser={authUser}
+        />
+      );
+    if (activePage === "reports.lowStockItems")
+      return (
+        <LowStockItemsPage
+          apiBaseUrl={apiBaseUrl}
+          authToken={authToken}
+          authUser={authUser}
+          searchQuery={topbarSearch}
         />
       );
     if (activePage === "reports.endOfDayCash")
