@@ -361,6 +361,11 @@ export default function EndOfDayCashPage({
         value: report.summary.grossProfit,
       });
     }
+    cards.push({
+      key: "refundAmount",
+      label: "Refunds",
+      value: report.summary.refundAmount,
+    });
     return cards.map((card) => ({ ...card, helper }));
   }, [date, report.summary, showGrossProfit]);
 
