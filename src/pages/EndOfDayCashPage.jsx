@@ -6,7 +6,6 @@ import {
   getAuthUserRole,
   getFetchCredentials,
   getReportStoreId,
-  parsePagedResponse,
 } from "../utils/common.js";
 import { makeStoreOptions, useStoresList } from "../utils/stores.js";
 
@@ -32,192 +31,167 @@ function formatIsoDateInput(value) {
   return `${y}-${m}-${d}`;
 }
 
-function dateFromIsoDateInput(value) {
-  const raw = String(value || "").trim();
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
-  if (!match) return null;
-  const y = Number(match[1]);
-  const m = Number(match[2]);
-  const d = Number(match[3]);
-  if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) return null;
-  return new Date(y, m - 1, d);
-}
-
-function getLocalDayBounds(dateKey) {
-  const base = dateFromIsoDateInput(dateKey);
-  if (!(base instanceof Date) || Number.isNaN(base.getTime())) return null;
-  const start = new Date(base.getFullYear(), base.getMonth(), base.getDate(), 0, 0, 0, 0);
-  const end = new Date(base.getFullYear(), base.getMonth(), base.getDate() + 1, 0, 0, 0, 0);
-  return { start, end };
-}
-
 function normalizeNumber(value) {
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
   if (value == null || value === "") return null;
-  const n = typeof value === "number" ? value : Number(value);
+  const n = Number(value);
   return Number.isFinite(n) ? n : null;
 }
 
-function toPositiveInt(value, fallback) {
-  const n = typeof value === "number" ? value : Number(value);
-  if (!Number.isFinite(n)) return fallback;
-  const i = Math.floor(n);
-  return i > 0 ? i : fallback;
+function roundMoney(value) {
+  const normalized = normalizeNumber(value);
+  if (!Number.isFinite(normalized)) return 0;
+  return Math.round(normalized * 100) / 100;
 }
 
-function extractSalesList(payload) {
-  if (Array.isArray(payload)) return payload;
-  if (Array.isArray(payload?.data)) return payload.data;
-  if (Array.isArray(payload?.items)) return payload.items;
-  if (Array.isArray(payload?.results)) return payload.results;
-  if (Array.isArray(payload?.data?.items)) return payload.data.items;
-  if (Array.isArray(payload?.data?.results)) return payload.data.results;
-  return [];
+function extractObject(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return value;
 }
 
-function getSaleCashierId(raw) {
-  if (!raw || typeof raw !== "object") return "";
-  const id =
-    raw.cashierId ??
-    raw.cashier_id ??
-    raw.employeeId ??
-    raw.employee_id ??
-    raw.userId ??
-    raw.user_id ??
-    raw.createdBy ??
-    raw.created_by ??
-    raw.cashier?.id ??
-    raw.cashier?._id ??
-    raw.employee?.id ??
-    raw.employee?._id ??
-    raw.user?.id ??
-    raw.user?._id ??
-    null;
-  return id == null ? "" : String(id);
-}
-
-function getSaleCreatedAt(raw) {
-  if (!raw || typeof raw !== "object") return null;
-  const createdAt = raw.createdAt ?? raw.created_at ?? raw.datetime ?? raw.date ?? null;
-  if (!createdAt) return null;
-  if (typeof createdAt === "string") {
-    const trimmed = createdAt.trim();
-    const looksIso =
-      /^\d{4}-\d{2}-\d{2}(?:[T\s]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)?$/.test(
-        trimmed,
-      );
-    if (!looksIso) return null;
+function getValueFromPaths(source, paths) {
+  for (const path of paths) {
+    const segments = String(path || "")
+      .split(".")
+      .filter(Boolean);
+    let current = source;
+    let missing = false;
+    for (const segment of segments) {
+      if (!current || typeof current !== "object" || !(segment in current)) {
+        missing = true;
+        break;
+      }
+      current = current[segment];
+    }
+    if (!missing && current != null && current !== "") return current;
   }
-  const dt = createdAt instanceof Date ? createdAt : new Date(createdAt);
-  if (Number.isNaN(dt.getTime())) return null;
-  return dt;
+  return null;
 }
 
-function getSaleGrossSales(raw) {
-  if (!raw || typeof raw !== "object") return null;
-  const totals = raw.totals && typeof raw.totals === "object" ? raw.totals : {};
-  const fromTotals =
-    normalizeNumber(totals.subtotal) ??
-    normalizeNumber(totals.gross) ??
-    normalizeNumber(totals.totalBeforeDiscount) ??
-    normalizeNumber(totals.total_before_discount) ??
-    null;
-  const fromRaw =
-    normalizeNumber(raw.subtotal) ??
-    normalizeNumber(raw.gross) ??
-    normalizeNumber(raw.totalBeforeDiscount) ??
-    normalizeNumber(raw.total_before_discount) ??
-    null;
+function normalizeEndOfDayReport(payload) {
+  const root = extractObject(payload?.data ?? payload);
+  const summary = extractObject(root.summary);
+  const cash = extractObject(root.cash);
 
-  const direct = fromTotals ?? fromRaw;
-  if (direct != null) return direct;
+  const money = (paths) => roundMoney(getValueFromPaths({ root, summary, cash }, paths));
+  const count = (paths) => {
+    const value = normalizeNumber(getValueFromPaths({ root, summary, cash }, paths));
+    return Number.isFinite(value) ? Math.round(value) : 0;
+  };
 
-  const rawItems = Array.isArray(raw.items) ? raw.items : [];
-  if (rawItems.length === 0) return null;
-
-  const derived = rawItems.reduce((sum, it) => {
-    if (!it || typeof it !== "object") return sum;
-    const qty = toPositiveInt(it.qty ?? it.quantity, 0);
-    const unitPrice = normalizeNumber(it.unitPrice ?? it.unit_price ?? it.price) ?? 0;
-    if (qty <= 0) return sum;
-    return sum + unitPrice * qty;
-  }, 0);
-  return derived;
+  return {
+    summary: {
+      grossSales: money([
+        "summary.grossSales",
+        "summary.gross_sales",
+        "root.grossSales",
+        "root.gross_sales",
+      ]),
+      netSales: money([
+        "summary.netSales",
+        "summary.net_sales",
+        "root.netSales",
+        "root.net_sales",
+      ]),
+      discounts: money([
+        "summary.discounts",
+        "summary.discountAmount",
+        "summary.discount_amount",
+        "root.discounts",
+        "root.discountAmount",
+        "root.discount_amount",
+      ]),
+      grossProfit: money([
+        "summary.grossProfit",
+        "summary.gross_profit",
+        "root.grossProfit",
+        "root.gross_profit",
+      ]),
+      costOfGoods: money([
+        "summary.costOfGoods",
+        "summary.cost_of_goods",
+        "summary.cogs",
+        "root.costOfGoods",
+        "root.cost_of_goods",
+        "root.cogs",
+      ]),
+      refundAmount: money([
+        "summary.refundAmount",
+        "summary.refund_amount",
+        "root.refundAmount",
+        "root.refund_amount",
+      ]),
+      salesTransactions: count([
+        "summary.salesTransactions",
+        "summary.sales_transactions",
+        "root.salesTransactions",
+        "root.sales_transactions",
+      ]),
+      refundTransactions: count([
+        "summary.refundTransactions",
+        "summary.refund_transactions",
+        "root.refundTransactions",
+        "root.refund_transactions",
+      ]),
+      receipts: count([
+        "summary.receipts",
+        "root.receipts",
+      ]),
+    },
+    cash: {
+      sales: money([
+        "cash.sales",
+        "cash.cashSales",
+        "cash.cash_sales",
+        "root.cashSales",
+        "root.cash_sales",
+      ]),
+      refunds: money([
+        "cash.refunds",
+        "cash.cashRefunds",
+        "cash.cash_refunds",
+        "root.cashRefunds",
+        "root.cash_refunds",
+      ]),
+      net: money([
+        "cash.net",
+        "cash.cashNet",
+        "cash.cash_net",
+        "root.cashNet",
+        "root.cash_net",
+      ]),
+      cashReceived: money([
+        "cash.cashReceived",
+        "cash.cash_received",
+        "root.cashReceived",
+        "root.cash_received",
+      ]),
+      changeGiven: money([
+        "cash.changeGiven",
+        "cash.change_given",
+        "root.changeGiven",
+        "root.change_given",
+      ]),
+      cashCollected: money([
+        "cash.cashCollected",
+        "cash.cash_collected",
+        "root.cashCollected",
+        "root.cash_collected",
+      ]),
+    },
+  };
 }
 
-function getSaleNetSales(raw, derivedSubtotal) {
-  if (!raw || typeof raw !== "object") return null;
-  const totals = raw.totals && typeof raw.totals === "object" ? raw.totals : {};
-  const direct =
-    normalizeNumber(totals.amountDue) ??
-    normalizeNumber(totals.total) ??
-    normalizeNumber(raw.amountDue) ??
-    normalizeNumber(raw.total) ??
-    normalizeNumber(raw.netSales) ??
-    normalizeNumber(raw.net_sales) ??
-    null;
-  const refunds =
-    normalizeNumber(totals.refunds) ??
-    normalizeNumber(raw.refunds) ??
-    normalizeNumber(raw.refundTotal) ??
-    0;
-  if (direct != null) return direct - refunds;
-
-  const discount =
-    normalizeNumber(totals.discount) ??
-    normalizeNumber(totals.discounts) ??
-    normalizeNumber(raw.discount) ??
-    normalizeNumber(raw.discounts) ??
-    null;
-  if (derivedSubtotal == null) return null;
-  return derivedSubtotal - (discount || 0) - refunds;
-}
-
-function getSaleDiscountAmount(raw, derivedSubtotal) {
-  if (!raw || typeof raw !== "object") return null;
-  const totals = raw.totals && typeof raw.totals === "object" ? raw.totals : {};
-
-  const direct =
-    normalizeNumber(totals.discount) ??
-    normalizeNumber(totals.discounts) ??
-    normalizeNumber(raw.discount) ??
-    normalizeNumber(raw.discounts) ??
-    null;
-  if (direct != null) return Math.max(0, direct);
-
-  const discountLines = Array.isArray(raw.discounts) ? raw.discounts : [];
-  if (discountLines.length) {
-    const sum = discountLines.reduce((acc, d) => {
-      if (!d || typeof d !== "object") return acc;
-      const amount = normalizeNumber(d.amount ?? d.discount ?? d.value ?? d.total) ?? 0;
-      return acc + amount;
-    }, 0);
-    if (Number.isFinite(sum) && sum > 0) return sum;
-  }
-
-  if (derivedSubtotal == null) return null;
-  const net = getSaleNetSales(raw, derivedSubtotal);
-  if (net == null) return null;
-  return Math.max(0, derivedSubtotal - net);
-}
-
-function getSaleCostOfGoods(raw, costByItemId) {
-  if (!raw || typeof raw !== "object") return 0;
-  const rawItems = Array.isArray(raw.items) ? raw.items : [];
-  if (rawItems.length === 0) return 0;
-  return rawItems.reduce((sum, it) => {
-    if (!it || typeof it !== "object") return sum;
-    const itemId = it.itemId ?? it.item_id ?? it.id ?? it._id ?? null;
-    const qty = toPositiveInt(it.qty ?? it.quantity, 0);
-    if (!itemId || qty <= 0) return sum;
-    const directCost =
-      normalizeNumber(it.cost ?? it.unitCost ?? it.unit_cost ?? it.costPrice ?? it.cost_price) ??
-      null;
-    const lookupCost =
-      directCost != null
-        ? directCost
-        : normalizeNumber(costByItemId?.get?.(String(itemId))) ?? 0;
-    return sum + lookupCost * qty;
-  }, 0);
+function MetricCard({ label, value, helper, isLoading = false }) {
+  return (
+    <div className="card salesSummaryKpiCard">
+      <div className="salesSummaryKpiLabel">{label}</div>
+      <div className="salesSummaryKpiValue">{isLoading ? "--" : formatMoney(value)}</div>
+      <div className="salesSummaryKpiDelta salesSummaryKpiDeltaUp">
+        {isLoading ? "Loading..." : helper}
+      </div>
+    </div>
+  );
 }
 
 export default function EndOfDayCashPage({
@@ -239,10 +213,27 @@ export default function EndOfDayCashPage({
 
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
-  const [grossSales, setGrossSales] = useState(0);
-  const [netSales, setNetSales] = useState(0);
-  const [discounts, setDiscounts] = useState(0);
-  const [grossProfit, setGrossProfit] = useState(0);
+  const [report, setReport] = useState(() => ({
+    summary: {
+      grossSales: 0,
+      netSales: 0,
+      discounts: 0,
+      grossProfit: 0,
+      costOfGoods: 0,
+      refundAmount: 0,
+      salesTransactions: 0,
+      refundTransactions: 0,
+      receipts: 0,
+    },
+    cash: {
+      sales: 0,
+      refunds: 0,
+      net: 0,
+      cashReceived: 0,
+      changeGiven: 0,
+      cashCollected: 0,
+    },
+  }));
 
   const lastFetchId = useRef(0);
 
@@ -304,31 +295,8 @@ export default function EndOfDayCashPage({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authRole, canPickStore, reportStoreId]);
 
-  const fetchAllPages = useCallback(
-    async (basePath, { maxPages = 12 } = {}) => {
-      const results = [];
-      let currentPage = 1;
-      while (currentPage <= maxPages) {
-        const path = basePath.includes("?")
-          ? `${basePath}&page=${currentPage}`
-          : `${basePath}?page=${currentPage}`;
-        const payload = await apiRequest(path);
-        const parsed = parsePagedResponse(payload, { page: currentPage, limit: 1000 });
-        const pageData = Array.isArray(parsed.data) ? parsed.data : [];
-        results.push(...pageData);
-        if (!parsed.hasNext || pageData.length === 0) break;
-        currentPage += 1;
-      }
-      return results;
-    },
-    [apiRequest],
-  );
-
   useEffect(() => {
-    if (!apiBaseUrl) return;
-    if (!date) return;
-    const bounds = getLocalDayBounds(date);
-    if (!bounds) return;
+    if (!apiBaseUrl || !date) return;
 
     const fetchId = ++lastFetchId.current;
     setIsLoading(true);
@@ -342,79 +310,59 @@ export default function EndOfDayCashPage({
           from: date,
           to: date,
           storeId: storeId || undefined,
+          allStores: canPickStore && !storeId ? true : undefined,
           employeeId: lockedCashierId || undefined,
-          cashierId: lockedCashierId || undefined,
-          page: 1,
-          limit: 500,
         });
 
-        const itemsQuery = buildQueryString({
-          storeId: storeId || undefined,
-          page: 1,
-          limit: 100,
-        });
-
-        const [rawSales, rawItems] = await Promise.all([
-          fetchAllPages(`/sales${query}`, { maxPages: 12 }),
-          showGrossProfit
-            ? fetchAllPages(`/items${itemsQuery}`, { maxPages: 50 }).catch(() => null)
-            : Promise.resolve(null),
-        ]);
-
-        const costByItemId = new Map();
-        if (showGrossProfit && rawItems) {
-          const itemsList = extractSalesList(rawItems);
-          for (const it of itemsList) {
-            if (!it || typeof it !== "object") continue;
-            const id = it.id ?? it._id ?? it.itemId ?? it.uuid ?? null;
-            if (!id) continue;
-            const cost = normalizeNumber(it.cost ?? it.unitCost ?? it.unit_cost);
-            if (Number.isFinite(cost)) costByItemId.set(String(id), cost);
-          }
-        }
-
-        const list = extractSalesList(rawSales);
-        const filtered = list.filter((s) => {
-          const dt = getSaleCreatedAt(s);
-          if (!dt) return false;
-          return dt >= bounds.start && dt < bounds.end;
-        }).filter((s) => {
-          if (!lockedCashierId) return true;
-          return getSaleCashierId(s) === lockedCashierId;
-        });
-        const totals = filtered.reduce(
-          (acc, s) => {
-            const saleGross = getSaleGrossSales(s);
-            const gross = saleGross ?? 0;
-            const net = getSaleNetSales(s, saleGross) ?? 0;
-            const discount = getSaleDiscountAmount(s, saleGross) ?? 0;
-            const cogs = showGrossProfit ? getSaleCostOfGoods(s, costByItemId) : 0;
-            acc.grossSales += gross;
-            acc.netSales += net;
-            acc.discounts += Math.max(0, discount);
-            acc.grossProfit += net - cogs;
-            return acc;
-          },
-          { grossSales: 0, netSales: 0, discounts: 0, grossProfit: 0 },
-        );
-
+        const payload = await apiRequest(`/sales/reports/end-of-day-cash${query}`);
         if (fetchId !== lastFetchId.current) return;
-        setGrossSales(Math.round(totals.grossSales * 100) / 100);
-        setNetSales(Math.round(totals.netSales * 100) / 100);
-        setDiscounts(Math.round(totals.discounts * 100) / 100);
-        setGrossProfit(Math.round(totals.grossProfit * 100) / 100);
+        setReport(normalizeEndOfDayReport(payload));
       } catch (e) {
         if (fetchId !== lastFetchId.current) return;
         setError(e instanceof Error ? e.message : "Failed to load end-of-day cash.");
-        setGrossSales(0);
-        setNetSales(0);
-        setDiscounts(0);
-        setGrossProfit(0);
+        setReport({
+          summary: {
+            grossSales: 0,
+            netSales: 0,
+            discounts: 0,
+            grossProfit: 0,
+            costOfGoods: 0,
+            refundAmount: 0,
+            salesTransactions: 0,
+            refundTransactions: 0,
+            receipts: 0,
+          },
+          cash: {
+            sales: 0,
+            refunds: 0,
+            net: 0,
+            cashReceived: 0,
+            changeGiven: 0,
+            cashCollected: 0,
+          },
+        });
       } finally {
         if (fetchId === lastFetchId.current) setIsLoading(false);
       }
     })();
-  }, [apiBaseUrl, apiRequest, date, fetchAllPages, lockedCashierId, showGrossProfit, storeId]);
+  }, [apiBaseUrl, apiRequest, canPickStore, date, lockedCashierId, storeId]);
+
+  const summaryCards = useMemo(() => {
+    const helper = `For ${date || "--"}`;
+    const cards = [
+      { key: "grossSales", label: "Gross sales", value: report.summary.grossSales },
+      { key: "netSales", label: "Net sales", value: report.summary.netSales },
+      { key: "discounts", label: "Discounts", value: report.summary.discounts },
+    ];
+    if (showGrossProfit) {
+      cards.push({
+        key: "grossProfit",
+        label: "Gross profit",
+        value: report.summary.grossProfit,
+      });
+    }
+    return cards.map((card) => ({ ...card, helper }));
+  }, [date, report.summary, showGrossProfit]);
 
   return (
     <div className="page salesSummaryPage">
@@ -468,47 +416,9 @@ export default function EndOfDayCashPage({
       {error ? <div className="authError salesSummaryError">{error}</div> : null}
 
       <div className="salesSummaryKpiGrid" aria-label="Key metrics">
-        <div className="card salesSummaryKpiCard">
-          <div className="salesSummaryKpiLabel">Gross sales</div>
-          <div className="salesSummaryKpiValue">
-            {isLoading ? "--" : formatMoney(grossSales)}
-          </div>
-          <div className="salesSummaryKpiDelta salesSummaryKpiDeltaUp">
-            {isLoading ? "Loading..." : `For ${date || "--"}`}
-          </div>
-        </div>
-
-        <div className="card salesSummaryKpiCard">
-          <div className="salesSummaryKpiLabel">Net sales</div>
-          <div className="salesSummaryKpiValue">
-            {isLoading ? "--" : formatMoney(netSales)}
-          </div>
-          <div className="salesSummaryKpiDelta salesSummaryKpiDeltaUp">
-            {isLoading ? "Loading..." : `For ${date || "--"}`}
-          </div>
-        </div>
-
-        <div className="card salesSummaryKpiCard">
-          <div className="salesSummaryKpiLabel">Discounts</div>
-          <div className="salesSummaryKpiValue">
-            {isLoading ? "--" : formatMoney(discounts)}
-          </div>
-          <div className="salesSummaryKpiDelta salesSummaryKpiDeltaUp">
-            {isLoading ? "Loading..." : `For ${date || "--"}`}
-          </div>
-        </div>
-
-        {showGrossProfit ? (
-          <div className="card salesSummaryKpiCard">
-            <div className="salesSummaryKpiLabel">Gross profit</div>
-            <div className="salesSummaryKpiValue">
-              {isLoading ? "--" : formatMoney(grossProfit)}
-            </div>
-            <div className="salesSummaryKpiDelta salesSummaryKpiDeltaUp">
-              {isLoading ? "Loading..." : `For ${date || "--"}`}
-            </div>
-          </div>
-        ) : null}
+        {summaryCards.map((card) => (
+          <MetricCard key={card.key} {...card} isLoading={isLoading} />
+        ))}
       </div>
     </div>
   );
