@@ -211,6 +211,62 @@ function extractSalesList(payload) {
   return [];
 }
 
+function normalizeSaleType(raw, fallbackType = "sale") {
+  if (!raw || typeof raw !== "object") return fallbackType;
+  const value =
+    raw.transactionType ??
+    raw.transaction_type ??
+    raw.type ??
+    raw.saleType ??
+    raw.sale_type ??
+    raw.kind ??
+    raw.recordType ??
+    raw.record_type ??
+    "";
+  const lowered = String(value || "").trim().toLowerCase();
+  if (lowered.includes("refund")) return "refund";
+  if (lowered.includes("sale")) return "sale";
+  return fallbackType;
+}
+
+function getSaleDirectNet(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  const totals = raw.totals && typeof raw.totals === "object" ? raw.totals : {};
+  return (
+    normalizeNumber(totals.amountDue) ??
+    normalizeNumber(totals.total) ??
+    normalizeNumber(totals.netSales) ??
+    normalizeNumber(totals.net_sales) ??
+    normalizeNumber(raw.amountDue) ??
+    normalizeNumber(raw.total) ??
+    normalizeNumber(raw.netSales) ??
+    normalizeNumber(raw.net_sales) ??
+    normalizeNumber(raw.amount) ??
+    normalizeNumber(raw.grandTotal) ??
+    normalizeNumber(raw.grand_total) ??
+    null
+  );
+}
+
+function getSaleRefunds(raw, saleType = normalizeSaleType(raw)) {
+  if (!raw || typeof raw !== "object") return 0;
+  const totals = raw.totals && typeof raw.totals === "object" ? raw.totals : {};
+  const direct =
+    normalizeNumber(totals.refunds) ??
+    normalizeNumber(totals.refundAmount) ??
+    normalizeNumber(totals.refund_amount) ??
+    normalizeNumber(raw.refunds) ??
+    normalizeNumber(raw.refundAmount) ??
+    normalizeNumber(raw.refund_amount) ??
+    normalizeNumber(raw.refundTotal) ??
+    normalizeNumber(raw.refund_total) ??
+    null;
+  if (direct != null) return Math.abs(direct);
+  if (saleType !== "refund") return 0;
+  const fallback = getSaleDirectNet(raw);
+  return fallback == null ? 0 : Math.abs(fallback);
+}
+
 function normalizeSale(raw, costByItemId) {
   if (!raw || typeof raw !== "object") return null;
 
@@ -236,6 +292,7 @@ function normalizeSale(raw, costByItemId) {
     raw.cashier?.fullName ??
     raw.user?.name ??
     "";
+  const saleType = normalizeSaleType(raw);
 
   const totals = raw.totals && typeof raw.totals === "object" ? raw.totals : {};
   const subtotal =
@@ -253,18 +310,8 @@ function normalizeSale(raw, costByItemId) {
     if (fromArray != null) discount = fromArray;
   }
   if (discount == null) discount = 0;
-  const netSales =
-    normalizeNumber(totals.amountDue) ??
-    normalizeNumber(totals.total) ??
-    normalizeNumber(raw.amountDue) ??
-    normalizeNumber(raw.total) ??
-    null;
-
-  const refunds =
-    normalizeNumber(totals.refunds) ??
-    normalizeNumber(raw.refunds) ??
-    normalizeNumber(raw.refundTotal) ??
-    0;
+  const netSales = getSaleDirectNet(raw);
+  const refunds = getSaleRefunds(raw, saleType);
 
   const rawItems = Array.isArray(raw.items) ? raw.items : [];
   const items = rawItems
@@ -290,17 +337,22 @@ function normalizeSale(raw, costByItemId) {
       : null);
 
   const derivedNet =
-    netSales != null
+    saleType === "refund"
+      ? -Math.abs(refunds || netSales || derivedSubtotal || 0)
+      : netSales != null
       ? netSales - (refunds || 0)
       : derivedSubtotal != null
         ? derivedSubtotal - (discount || 0) - (refunds || 0)
         : null;
 
-  const costOfGoods = items.reduce((sum, it) => {
-    const cost = costByItemId?.get?.(it.itemId);
-    const unitCost = Number.isFinite(cost) ? cost : 0;
-    return sum + unitCost * it.qty;
-  }, 0);
+  const costOfGoods =
+    saleType === "refund"
+      ? 0
+      : items.reduce((sum, it) => {
+          const cost = costByItemId?.get?.(it.itemId);
+          const unitCost = Number.isFinite(cost) ? cost : 0;
+          return sum + unitCost * it.qty;
+        }, 0);
 
   const grossProfit = derivedNet == null ? null : derivedNet - costOfGoods;
 
@@ -313,9 +365,9 @@ function normalizeSale(raw, costByItemId) {
     dayKey,
     cashierId: cashierId == null ? "" : String(cashierId),
     cashierName: String(cashierName || ""),
-    grossSales: derivedSubtotal ?? 0,
+    grossSales: saleType === "refund" ? 0 : (derivedSubtotal ?? 0),
     refunds: refunds ?? 0,
-    discounts: discount ?? 0,
+    discounts: saleType === "refund" ? 0 : (discount ?? 0),
     netSales: derivedNet ?? 0,
     costOfGoods,
     grossProfit: grossProfit ?? 0,

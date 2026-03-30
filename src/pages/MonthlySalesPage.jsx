@@ -99,6 +99,24 @@ function getLocalDayKey(value) {
   return formatIsoDateInput(date);
 }
 
+function normalizeSaleType(raw, fallbackType = "sale") {
+  if (!raw || typeof raw !== "object") return fallbackType;
+  const value =
+    raw.transactionType ??
+    raw.transaction_type ??
+    raw.type ??
+    raw.saleType ??
+    raw.sale_type ??
+    raw.kind ??
+    raw.recordType ??
+    raw.record_type ??
+    "";
+  const lowered = String(value || "").trim().toLowerCase();
+  if (lowered.includes("refund")) return "refund";
+  if (lowered.includes("sale")) return "sale";
+  return fallbackType;
+}
+
 function getSaleGrossSales(raw) {
   if (!raw || typeof raw !== "object") return null;
   const totals = raw.totals && typeof raw.totals === "object" ? raw.totals : {};
@@ -131,6 +149,25 @@ function getSaleGrossSales(raw) {
   return derived;
 }
 
+function getSaleDirectNet(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  const totals = raw.totals && typeof raw.totals === "object" ? raw.totals : {};
+  return (
+    normalizeNumber(totals.amountDue) ??
+    normalizeNumber(totals.total) ??
+    normalizeNumber(totals.netSales) ??
+    normalizeNumber(totals.net_sales) ??
+    normalizeNumber(raw.amountDue) ??
+    normalizeNumber(raw.total) ??
+    normalizeNumber(raw.netSales) ??
+    normalizeNumber(raw.net_sales) ??
+    normalizeNumber(raw.amount) ??
+    normalizeNumber(raw.grandTotal) ??
+    normalizeNumber(raw.grand_total) ??
+    null
+  );
+}
+
 function getSaleDiscount(raw) {
   if (!raw || typeof raw !== "object") return 0;
   const totals = raw.totals && typeof raw.totals === "object" ? raw.totals : {};
@@ -147,29 +184,29 @@ function getSaleDiscount(raw) {
   return discount;
 }
 
-function getSaleRefunds(raw) {
+function getSaleRefunds(raw, saleType = normalizeSaleType(raw)) {
   if (!raw || typeof raw !== "object") return 0;
   const totals = raw.totals && typeof raw.totals === "object" ? raw.totals : {};
-  return (
+  const direct =
     normalizeNumber(totals.refunds) ??
+    normalizeNumber(totals.refundAmount) ??
+    normalizeNumber(totals.refund_amount) ??
     normalizeNumber(raw.refunds) ??
+    normalizeNumber(raw.refundAmount) ??
+    normalizeNumber(raw.refund_amount) ??
     normalizeNumber(raw.refundTotal) ??
-    0
-  );
+    normalizeNumber(raw.refund_total) ??
+    null;
+  if (direct != null) return Math.abs(direct);
+  if (saleType !== "refund") return 0;
+  const fallback = getSaleDirectNet(raw);
+  return fallback == null ? 0 : Math.abs(fallback);
 }
 
-function getSaleNetSales(raw, derivedSubtotal) {
+function getSaleNetSales(raw, derivedSubtotal, saleType = normalizeSaleType(raw), refunds = getSaleRefunds(raw, saleType)) {
   if (!raw || typeof raw !== "object") return null;
-  const totals = raw.totals && typeof raw.totals === "object" ? raw.totals : {};
-  const direct =
-    normalizeNumber(totals.amountDue) ??
-    normalizeNumber(totals.total) ??
-    normalizeNumber(raw.amountDue) ??
-    normalizeNumber(raw.total) ??
-    normalizeNumber(raw.netSales) ??
-    normalizeNumber(raw.net_sales) ??
-    null;
-  const refunds = getSaleRefunds(raw);
+  const direct = getSaleDirectNet(raw);
+  if (saleType === "refund") return -Math.abs(refunds || direct || derivedSubtotal || 0);
   if (direct != null) return direct - refunds;
   const discount = getSaleDiscount(raw);
   if (derivedSubtotal == null) return null;
@@ -231,11 +268,12 @@ function normalizeSale(raw, costByItemId) {
   const dayKey = getLocalDayKey(createdAt);
   if (!dayKey) return null;
 
-  const grossSales = getSaleGrossSales(raw) ?? 0;
-  const discounts = getSaleDiscount(raw) ?? 0;
-  const refunds = getSaleRefunds(raw) ?? 0;
-  const netSales = getSaleNetSales(raw, grossSales) ?? 0;
-  const costOfGoods = getSaleCostOfGoods(raw, costByItemId) ?? 0;
+  const saleType = normalizeSaleType(raw);
+  const grossSales = saleType === "refund" ? 0 : (getSaleGrossSales(raw) ?? 0);
+  const discounts = saleType === "refund" ? 0 : (getSaleDiscount(raw) ?? 0);
+  const refunds = getSaleRefunds(raw, saleType) ?? 0;
+  const netSales = getSaleNetSales(raw, grossSales, saleType, refunds) ?? 0;
+  const costOfGoods = saleType === "refund" ? 0 : (getSaleCostOfGoods(raw, costByItemId) ?? 0);
   const grossProfit = netSales - costOfGoods;
 
   return {

@@ -192,6 +192,21 @@ function normalizeItems(raw) {
     .filter(Boolean);
 }
 
+function formatItemsSummary(items) {
+  if (!Array.isArray(items) || items.length === 0) return "--";
+  const labels = items
+    .map((item) => {
+      if (!item || typeof item !== "object") return "";
+      const name = String(item.name || "").trim();
+      const qty = Number.isFinite(item.qty) && item.qty > 0 ? ` x${item.qty}` : "";
+      return `${name || "Item"}${qty}`;
+    })
+    .filter(Boolean);
+  if (labels.length === 0) return "--";
+  if (labels.length <= 2) return labels.join(", ");
+  return `${labels.slice(0, 2).join(", ")} +${labels.length - 2} more`;
+}
+
 function isRefundedSale(raw) {
   if (!raw || typeof raw !== "object") return false;
 
@@ -745,6 +760,7 @@ export default function CashierRefundsPage({
                   <tr>
                     <th className="receiptsColNo">Receipt no.</th>
                     <th className="receiptsColDate">Date</th>
+                    <th className="receiptsColItems">Items</th>
                     <th className="receiptsColCustomer">Customer</th>
                     <th className="receiptsColType">Status</th>
                     <th className="colMoney">Total</th>
@@ -753,7 +769,7 @@ export default function CashierRefundsPage({
                 <tbody>
                   {rows.length === 0 ? (
                     <tr>
-                      <td colSpan={5} className="usersEmpty">
+                      <td colSpan={6} className="usersEmpty">
                         {isLoading
                           ? "Loading..."
                           : activeTab === "sales"
@@ -783,6 +799,12 @@ export default function CashierRefundsPage({
                       >
                         <td className="receiptsColNo">{row.receiptNo || row.id}</td>
                         <td className="receiptsColDate">{formatReceiptDate(row.date)}</td>
+                        <td
+                          className="receiptsColItems"
+                          title={row.items?.length ? row.items.map((item) => `${item.name}${item.qty ? ` x${item.qty}` : ""}`).join(", ") : ""}
+                        >
+                          {formatItemsSummary(row.items)}
+                        </td>
                         <td className="receiptsColCustomer">{row.customer || "Walk-in"}</td>
                         <td className="receiptsColType">
                           {row.type === "refund"

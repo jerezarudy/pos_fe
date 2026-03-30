@@ -273,7 +273,8 @@ export default function SalesByEmployeePage({ apiBaseUrl, authToken, authUser })
               r.employeeId ?? r.employee_id ?? r.id ?? r.userId ?? r.cashierId ?? null;
             const name = String(r.name ?? r.employeeName ?? r.employee_name ?? r.label ?? "").trim();
             const grossSales = normalizeNumber(r.grossSales ?? r.gross_sales) ?? 0;
-            const refunds = normalizeNumber(r.refunds) ?? 0;
+            const refunds =
+              normalizeNumber(r.refunds ?? r.refundAmount ?? r.refund_amount) ?? 0;
             const discounts = normalizeNumber(r.discounts) ?? 0;
             const netBeforeRefunds =
               normalizeNumber(r.netSales ?? r.net_sales) ??
