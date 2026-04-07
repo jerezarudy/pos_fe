@@ -158,24 +158,6 @@ function loadCashiersFromStorage() {
   return out;
 }
 
-function sumDiscountAmounts(discounts) {
-  if (!Array.isArray(discounts)) return null;
-  let sum = 0;
-  let hasAny = false;
-  for (const d of discounts) {
-    if (!d || typeof d !== "object") continue;
-    const amount =
-      normalizeNumber(d.amount) ??
-      normalizeNumber(d.discountAmount) ??
-      normalizeNumber(d.discount_amount) ??
-      null;
-    if (!Number.isFinite(amount)) continue;
-    sum += amount;
-    hasAny = true;
-  }
-  return hasAny ? sum : 0;
-}
-
 function toCsv(rows) {
   const escape = (v) => {
     const s = v == null ? "" : String(v);
@@ -211,191 +193,70 @@ function extractSalesList(payload) {
   return [];
 }
 
-function normalizeSaleType(raw, fallbackType = "sale") {
-  if (!raw || typeof raw !== "object") return fallbackType;
-  const value =
-    raw.transactionType ??
-    raw.transaction_type ??
-    raw.type ??
-    raw.saleType ??
-    raw.sale_type ??
-    raw.kind ??
-    raw.recordType ??
-    raw.record_type ??
-    "";
-  const lowered = String(value || "").trim().toLowerCase();
-  if (lowered.includes("refund")) return "refund";
-  if (lowered.includes("sale")) return "sale";
-  return fallbackType;
-}
-
-function getSaleDirectNet(raw) {
-  if (!raw || typeof raw !== "object") return null;
-  const totals = raw.totals && typeof raw.totals === "object" ? raw.totals : {};
-  return (
-    normalizeNumber(totals.amountDue) ??
-    normalizeNumber(totals.total) ??
-    normalizeNumber(totals.netSales) ??
-    normalizeNumber(totals.net_sales) ??
-    normalizeNumber(raw.amountDue) ??
-    normalizeNumber(raw.total) ??
-    normalizeNumber(raw.netSales) ??
-    normalizeNumber(raw.net_sales) ??
-    normalizeNumber(raw.amount) ??
-    normalizeNumber(raw.grandTotal) ??
-    normalizeNumber(raw.grand_total) ??
-    null
-  );
-}
-
-function getSaleRefunds(raw, saleType = normalizeSaleType(raw)) {
-  if (!raw || typeof raw !== "object") return 0;
-  const totals = raw.totals && typeof raw.totals === "object" ? raw.totals : {};
-  const direct =
-    normalizeNumber(totals.refunds) ??
-    normalizeNumber(totals.refundAmount) ??
-    normalizeNumber(totals.refund_amount) ??
-    normalizeNumber(raw.refunds) ??
-    normalizeNumber(raw.refundAmount) ??
-    normalizeNumber(raw.refund_amount) ??
-    normalizeNumber(raw.refundTotal) ??
-    normalizeNumber(raw.refund_total) ??
-    null;
-  if (direct != null) return Math.abs(direct);
-  if (saleType !== "refund") return 0;
-  const fallback = getSaleDirectNet(raw);
-  return fallback == null ? 0 : Math.abs(fallback);
-}
-
-function normalizeSale(raw, costByItemId) {
-  if (!raw || typeof raw !== "object") return null;
-
-  const id = raw.id ?? raw._id ?? raw.saleId ?? raw.uuid ?? null;
-  const createdAt =
-    raw.createdAt ?? raw.created_at ?? raw.date ?? raw.datetime ?? null;
-  const cashierId =
-    raw.cashierId ??
-    raw.cashier_id ??
-    raw.employeeId ??
-    raw.employee_id ??
-    raw.userId ??
-    raw.user_id ??
-    raw.cashier?.id ??
-    raw.cashier?._id ??
-    null;
-  const cashierName =
-    raw.cashierName ??
-    raw.cashier_name ??
-    raw.employeeName ??
-    raw.employee_name ??
-    raw.cashier?.name ??
-    raw.cashier?.fullName ??
-    raw.user?.name ??
-    "";
-  const saleType = normalizeSaleType(raw);
-
-  const totals = raw.totals && typeof raw.totals === "object" ? raw.totals : {};
-  const subtotal =
-    normalizeNumber(totals.subtotal) ??
-    normalizeNumber(totals.gross) ??
-    normalizeNumber(raw.subtotal) ??
-    null;
-  let discount =
-    normalizeNumber(totals.discount) ??
-    normalizeNumber(totals.discounts) ??
-    normalizeNumber(raw.discount) ??
-    null;
-  if (discount == null) {
-    const fromArray = sumDiscountAmounts(raw.discounts);
-    if (fromArray != null) discount = fromArray;
-  }
-  if (discount == null) discount = 0;
-  const netSales = getSaleDirectNet(raw);
-  const refunds = getSaleRefunds(raw, saleType);
-
-  const rawItems = Array.isArray(raw.items) ? raw.items : [];
-  const items = rawItems
-    .map((it) => {
-      if (!it || typeof it !== "object") return null;
-      const itemId = it.itemId ?? it.item_id ?? it.id ?? it._id ?? null;
-      const qty = toPositiveInt(it.qty ?? it.quantity, 0);
-      const unitPrice =
-        normalizeNumber(it.unitPrice ?? it.unit_price ?? it.price) ?? 0;
-      if (!itemId || qty <= 0) return null;
-      return { itemId: String(itemId), qty, unitPrice };
-    })
-    .filter(Boolean);
-
-  const derivedSubtotal =
-    subtotal ??
-    (items.length
-      ? items.reduce(
-          (sum, it) =>
-            sum + (Number.isFinite(it.unitPrice) ? it.unitPrice : 0) * it.qty,
-          0,
-        )
-      : null);
-
-  const derivedNet =
-    saleType === "refund"
-      ? -Math.abs(refunds || netSales || derivedSubtotal || 0)
-      : netSales != null
-      ? netSales - (refunds || 0)
-      : derivedSubtotal != null
-        ? derivedSubtotal - (discount || 0) - (refunds || 0)
-        : null;
-
+function normalizeSummaryTotals(raw) {
+  const source = raw && typeof raw === "object" ? raw : {};
+  const grossSales = normalizeNumber(source.grossSales ?? source.gross_sales) ?? 0;
+  const refunds =
+    normalizeNumber(source.refunds ?? source.refundAmount ?? source.refund_amount) ??
+    0;
+  const discounts =
+    normalizeNumber(source.discounts ?? source.discountAmount ?? source.discount_amount) ??
+    0;
+  const netSales =
+    normalizeNumber(source.netSales ?? source.net_sales) ??
+    grossSales - refunds - discounts;
   const costOfGoods =
-    saleType === "refund"
-      ? 0
-      : items.reduce((sum, it) => {
-          const cost = costByItemId?.get?.(it.itemId);
-          const unitCost = Number.isFinite(cost) ? cost : 0;
-          return sum + unitCost * it.qty;
-        }, 0);
-
-  const grossProfit = derivedNet == null ? null : derivedNet - costOfGoods;
-
-  const dayKey = getLocalDayKey(createdAt);
-  if (!dayKey) return null;
+    normalizeNumber(source.costOfGoods ?? source.cost_of_goods ?? source.cogs) ?? 0;
+  const grossProfit =
+    normalizeNumber(source.grossProfit ?? source.gross_profit) ??
+    netSales - costOfGoods;
+  const salesTransactions = toPositiveInt(
+    source.salesTransactions ?? source.sales_transactions,
+    0,
+  );
+  const refundTransactions = toPositiveInt(
+    source.refundTransactions ?? source.refund_transactions,
+    0,
+  );
+  const receipts = toPositiveInt(
+    source.receipts ?? source.transactions,
+    salesTransactions + refundTransactions,
+  );
+  const averageSale =
+    normalizeNumber(source.averageSale ?? source.average_sale ?? source.avgSale) ??
+    (salesTransactions > 0 ? netSales / salesTransactions : 0);
 
   return {
-    id: id == null ? dayKey : String(id),
-    createdAt,
-    dayKey,
-    cashierId: cashierId == null ? "" : String(cashierId),
-    cashierName: String(cashierName || ""),
-    grossSales: saleType === "refund" ? 0 : (derivedSubtotal ?? 0),
-    refunds: refunds ?? 0,
-    discounts: saleType === "refund" ? 0 : (discount ?? 0),
-    netSales: derivedNet ?? 0,
+    grossSales,
+    refunds,
+    discounts,
+    netSales,
     costOfGoods,
-    grossProfit: grossProfit ?? 0,
+    grossProfit,
+    salesTransactions,
+    refundTransactions,
+    receipts,
+    averageSale,
   };
 }
 
-function aggregateByDay(sales) {
-  const byDay = new Map();
-  for (const sale of sales) {
-    const key = sale.dayKey;
-    const current = byDay.get(key) || {
-      dayKey: key,
-      grossSales: 0,
-      refunds: 0,
-      discounts: 0,
-      netSales: 0,
-      costOfGoods: 0,
-      grossProfit: 0,
-    };
-    current.grossSales += sale.grossSales || 0;
-    current.refunds += sale.refunds || 0;
-    current.discounts += sale.discounts || 0;
-    current.netSales += sale.netSales || 0;
-    current.costOfGoods += sale.costOfGoods || 0;
-    current.grossProfit += sale.grossProfit || 0;
-    byDay.set(key, current);
-  }
-  return byDay;
+function normalizeSummaryDayKey(value) {
+  const raw = String(value ?? "").trim();
+  const dateOnly = /^(\d{4}-\d{2}-\d{2})/.exec(raw);
+  if (dateOnly) return dateOnly[1];
+  return getLocalDayKey(raw);
+}
+
+function normalizeSummarySeriesPoint(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  const dayKey = normalizeSummaryDayKey(
+    raw.x ?? raw.dayKey ?? raw.day_key ?? raw.date ?? raw.bucket,
+  );
+  if (!dayKey) return null;
+  return {
+    dayKey,
+    ...normalizeSummaryTotals(raw),
+  };
 }
 
 function sumTotals(list) {
@@ -407,6 +268,9 @@ function sumTotals(list) {
       acc.netSales += row.netSales || 0;
       acc.costOfGoods += row.costOfGoods || 0;
       acc.grossProfit += row.grossProfit || 0;
+      acc.salesTransactions += row.salesTransactions || 0;
+      acc.refundTransactions += row.refundTransactions || 0;
+      acc.receipts += row.receipts || 0;
       return acc;
     },
     {
@@ -416,8 +280,109 @@ function sumTotals(list) {
       netSales: 0,
       costOfGoods: 0,
       grossProfit: 0,
+      salesTransactions: 0,
+      refundTransactions: 0,
+      receipts: 0,
+      averageSale: 0,
     },
   );
+}
+
+function normalizeSummaryRange(raw, fallback = {}) {
+  const source = raw && typeof raw === "object" ? raw : {};
+  const series = (
+    Array.isArray(source.series)
+      ? source.series
+      : Array.isArray(source.data)
+        ? source.data
+        : []
+  )
+    .map(normalizeSummarySeriesPoint)
+    .filter(Boolean);
+
+  const totals =
+    source.totals && typeof source.totals === "object"
+      ? normalizeSummaryTotals(source.totals)
+      : normalizeSummaryTotals(sumTotals(series));
+
+  return {
+    from: String(source.from ?? fallback.from ?? ""),
+    to: String(source.to ?? fallback.to ?? ""),
+    totals,
+    series,
+  };
+}
+
+function normalizeSummaryReport(payload, fallback = {}) {
+  const source =
+    payload?.data && typeof payload.data === "object" && !Array.isArray(payload.data)
+      ? payload.data
+      : payload;
+  const root = source && typeof source === "object" ? source : {};
+  const current = normalizeSummaryRange(root.current ?? root, {
+    from: root.from ?? fallback.from,
+    to: root.to ?? fallback.to,
+  });
+  const previous = normalizeSummaryRange(root.previous, {
+    from: root.previousFrom ?? root.previous_from ?? fallback.previousFrom,
+    to: root.previousTo ?? root.previous_to ?? fallback.previousTo,
+  });
+
+  return {
+    from: String(root.from ?? current.from ?? fallback.from ?? ""),
+    to: String(root.to ?? current.to ?? fallback.to ?? ""),
+    previousFrom: String(
+      root.previousFrom ?? root.previous_from ?? previous.from ?? fallback.previousFrom ?? "",
+    ),
+    previousTo: String(
+      root.previousTo ?? root.previous_to ?? previous.to ?? fallback.previousTo ?? "",
+    ),
+    currency: String(root.currency ?? "PHP"),
+    bucket: String(root.bucket ?? fallback.bucket ?? "day"),
+    current,
+    previous,
+  };
+}
+
+function extractEmployeeOptions(payload) {
+  const map = new Map();
+  for (const c of loadCashiersFromStorage()) {
+    map.set(c.id, c.label);
+  }
+
+  const parsed = payload
+    ? parsePagedResponse(payload, { page: 1, limit: 1000 })
+    : { data: [] };
+  for (const r of extractSalesList(parsed.data)) {
+    if (!r || typeof r !== "object") continue;
+    const id =
+      r.employeeId ??
+      r.employee_id ??
+      r.id ??
+      r.userId ??
+      r.user_id ??
+      r.cashierId ??
+      r.cashier_id ??
+      null;
+    if (!id) continue;
+    const label =
+      String(
+        r.name ??
+          r.employeeName ??
+          r.employee_name ??
+          r.label ??
+          r.cashierName ??
+          r.cashier_name ??
+          "",
+      ).trim() || String(id);
+    map.set(String(id), label);
+  }
+
+  return [...map.entries()]
+    .map(([id, label]) => ({ id, label }))
+    .sort((a, b) =>
+      a.label.localeCompare(b.label, undefined, { sensitivity: "base" }),
+    );
 }
 
 function pctChange(current, previous) {
@@ -654,7 +619,7 @@ export default function SalesSummaryPage({ apiBaseUrl, authToken, authUser }) {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
   const [isDemoData, setIsDemoData] = useState(false);
-  const [sales, setSales] = useState([]);
+  const [summaryReport, setSummaryReport] = useState(null);
   const [employees, setEmployees] = useState([]);
 
   const [stores, setStores] = useState(() => {
@@ -688,14 +653,15 @@ export default function SalesSummaryPage({ apiBaseUrl, authToken, authUser }) {
     return { from: to, to: from };
   }, [dayPart, endDate, endTime, startDate, startTime]);
 
-  const timeFilteredSales = useMemo(() => {
-    if (!timeBounds) return sales;
-    return sales.filter((s) => {
-      const dt = new Date(s?.createdAt ?? "");
-      if (Number.isNaN(dt.getTime())) return false;
-      return dt >= timeBounds.from && dt <= timeBounds.to;
-    });
-  }, [sales, timeBounds]);
+  const summaryRangeParams = useMemo(() => {
+    if (dayPart !== "all" && timeBounds) {
+      return {
+        from: timeBounds.from.toISOString(),
+        to: timeBounds.to.toISOString(),
+      };
+    }
+    return { startDate, endDate };
+  }, [dayPart, endDate, startDate, timeBounds]);
 
   const storeOptions = useMemo(() => {
     const map = new Map();
@@ -800,29 +766,6 @@ export default function SalesSummaryPage({ apiBaseUrl, authToken, authUser }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [apiRequest]);
 
-  const fetchAllPages = useCallback(
-    async (basePath, { maxPages = 12 } = {}) => {
-      const results = [];
-      let currentPage = 1;
-      while (currentPage <= maxPages) {
-        const path = basePath.includes("?")
-          ? `${basePath}&page=${currentPage}`
-          : `${basePath}?page=${currentPage}`;
-        const payload = await apiRequest(path);
-        const parsed = parsePagedResponse(payload, {
-          page: currentPage,
-          limit: 1000,
-        });
-        const pageData = Array.isArray(parsed.data) ? parsed.data : [];
-        results.push(...pageData);
-        if (!parsed.hasNext || pageData.length === 0) break;
-        currentPage += 1;
-      }
-      return results;
-    },
-    [apiRequest],
-  );
-
   useEffect(() => {
     const start = new Date(startDate);
     const end = new Date(endDate);
@@ -841,9 +784,6 @@ export default function SalesSummaryPage({ apiBaseUrl, authToken, authUser }) {
     const prevEnd = addDays(clamped.start, -1);
     const prevStart = addDays(prevEnd, -(rangeDays - 1));
 
-    const fetchStart = prevStart;
-    const fetchEnd = clamped.end;
-
     const fetchId = ++lastFetchId.current;
     setIsLoading(true);
     setError("");
@@ -851,77 +791,60 @@ export default function SalesSummaryPage({ apiBaseUrl, authToken, authUser }) {
 
     (async () => {
       try {
-        const query = buildQueryString({
-          startDate: formatIsoDateInput(fetchStart),
-          endDate: formatIsoDateInput(fetchEnd),
+        const summaryQuery = buildQueryString({
+          ...summaryRangeParams,
+          bucket: granularity,
           storeId: storeId || undefined,
           ...(employeeId !== "all" ? { employeeId } : null),
         });
 
-        const itemsQuery = buildQueryString({
-          limit: 2000,
-          page: 1,
+        const employeesQuery = buildQueryString({
+          ...summaryRangeParams,
           storeId: storeId || undefined,
+          page: 1,
+          limit: 1000,
         });
 
-        const [rawSales, rawItems] = await Promise.all([
-          fetchAllPages(`/sales${query}`, { maxPages: 12 }),
-          apiRequest(`/items${itemsQuery}`).catch(() => null),
+        const [summaryPayload, employeePayload] = await Promise.all([
+          apiRequest(`/sales/reports/summary${summaryQuery}`),
+          apiRequest(`/sales/reports/by-employee${employeesQuery}`).catch(
+            () => null,
+          ),
         ]);
 
-        const itemsList = rawItems ? extractSalesList(rawItems) : [];
-        const costByItemId = new Map();
-        for (const it of itemsList) {
-          if (!it || typeof it !== "object") continue;
-          const id = it.id ?? it._id ?? it.itemId ?? it.uuid ?? null;
-          if (!id) continue;
-          const cost = normalizeNumber(it.cost ?? it.unitCost ?? it.unit_cost);
-          if (Number.isFinite(cost)) costByItemId.set(String(id), cost);
-        }
-
-        const normalized = rawSales
-          .map((s) => normalizeSale(s, costByItemId))
-          .filter(Boolean);
-
         if (fetchId !== lastFetchId.current) return;
-        setSales(normalized);
+        setSummaryReport(
+          normalizeSummaryReport(summaryPayload, {
+            from: formatIsoDateInput(clamped.start),
+            to: formatIsoDateInput(clamped.end),
+            previousFrom: formatIsoDateInput(prevStart),
+            previousTo: formatIsoDateInput(prevEnd),
+            bucket: granularity,
+          }),
+        );
         setIsDemoData(false);
-
-        const employeeMap = new Map();
-        for (const c of loadCashiersFromStorage()) {
-          employeeMap.set(c.id, c.label);
-        }
-        for (const s of normalized) {
-          if (!s.cashierId || s.cashierId === "null") continue;
-          const label = s.cashierName?.trim()
-            ? s.cashierName.trim()
-            : s.cashierId;
-          employeeMap.set(s.cashierId, label);
-        }
-        const employeeOptions = [...employeeMap.entries()]
-          .map(([id, label]) => ({ id, label }))
-          .sort((a, b) =>
-            a.label.localeCompare(b.label, undefined, { sensitivity: "base" }),
-          );
-        setEmployees(employeeOptions);
+        setEmployees(extractEmployeeOptions(employeePayload));
       } catch (e) {
         if (fetchId !== lastFetchId.current) return;
-        const _message =
+        const message =
           e instanceof Error ? e.message : "Failed to load sales summary.";
-        // setError(`${message} (Showing demo data)`);
+        setError(message);
+        setSummaryReport(null);
         setIsDemoData(false);
-        // setSales(
-        //   generateDemoSales({
-        //     startKey: formatIsoDateInput(fetchStart),
-        //     endKey: formatIsoDateInput(fetchEnd),
-        //   }),
-        // );
-        // setEmployees([{ id: "demo", label: "Demo employee" }]);
+        setEmployees(extractEmployeeOptions(null));
       } finally {
         if (fetchId === lastFetchId.current) setIsLoading(false);
       }
     })();
-  }, [apiRequest, employeeId, endDate, fetchAllPages, startDate, storeId]);
+  }, [
+    apiRequest,
+    employeeId,
+    endDate,
+    granularity,
+    startDate,
+    storeId,
+    summaryRangeParams,
+  ]);
 
   const currentRange = useMemo(() => {
     const start = new Date(startDate);
@@ -942,14 +865,10 @@ export default function SalesSummaryPage({ apiBaseUrl, authToken, authUser }) {
     const currentKeys = new Set(
       listDayKeysInRange(currentRange.start, currentRange.end),
     );
-    const prevKeys = new Set(
-      listDayKeysInRange(currentRange.prevStart, currentRange.prevEnd),
+
+    const aggregated = new Map(
+      (summaryReport?.current?.series ?? []).map((row) => [row.dayKey, row]),
     );
-
-    const currentSales = timeFilteredSales.filter((s) => currentKeys.has(s.dayKey));
-    const prevSales = timeFilteredSales.filter((s) => prevKeys.has(s.dayKey));
-
-    const aggregated = aggregateByDay(currentSales);
     const dayKeys = [...currentKeys].sort((a, b) => a.localeCompare(b));
     const dayRows = dayKeys.map(
       (k) =>
@@ -964,23 +883,10 @@ export default function SalesSummaryPage({ apiBaseUrl, authToken, authUser }) {
         },
     );
 
-    const currentTotals = sumTotals(dayRows);
-    const prevAggregated = aggregateByDay(prevSales);
-    const prevRows = [...prevKeys]
-      .sort((a, b) => a.localeCompare(b))
-      .map(
-        (k) =>
-          prevAggregated.get(k) || {
-            dayKey: k,
-            grossSales: 0,
-            refunds: 0,
-            discounts: 0,
-            netSales: 0,
-            costOfGoods: 0,
-            grossProfit: 0,
-          },
-      );
-    const prevTotals = sumTotals(prevRows);
+    const currentTotals = summaryReport?.current?.totals ?? sumTotals(dayRows);
+    const prevTotals =
+      summaryReport?.previous?.totals ??
+      normalizeSummaryTotals(sumTotals(summaryReport?.previous?.series ?? []));
 
     const mkKpi = (label, key) => {
       const current = currentTotals[key] || 0;
@@ -1016,7 +922,7 @@ export default function SalesSummaryPage({ apiBaseUrl, authToken, authUser }) {
       kpis: kpiList,
       chart: { labels: chartLabels, values: chartValues },
     };
-  }, [area, currentRange, timeFilteredSales]);
+  }, [area, currentRange, summaryReport]);
 
   const totalPages = useMemo(() => {
     if (!tableRows.length) return 1;
