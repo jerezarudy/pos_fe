@@ -293,6 +293,8 @@ function normalizeAuditEntry(raw) {
 
   const previousStock = toFiniteNumber(
     firstValue(raw, [
+      "beforeStock",
+      "before_stock",
       "before.inStock",
       "before.stock",
       "previous.inStock",
@@ -308,6 +310,8 @@ function normalizeAuditEntry(raw) {
 
   const nextStock = toFiniteNumber(
     firstValue(raw, [
+      "afterStock",
+      "after_stock",
       "after.inStock",
       "after.stock",
       "current.inStock",
@@ -325,6 +329,8 @@ function normalizeAuditEntry(raw) {
 
   const previousTrackStock = toBooleanOrNull(
     firstValue(raw, [
+      "beforeTrackStock",
+      "before_track_stock",
       "before.trackStock",
       "before.track_stock",
       "previous.trackStock",
@@ -340,6 +346,8 @@ function normalizeAuditEntry(raw) {
 
   const nextTrackStock = toBooleanOrNull(
     firstValue(raw, [
+      "afterTrackStock",
+      "after_track_stock",
       "after.trackStock",
       "after.track_stock",
       "current.trackStock",
@@ -556,11 +564,28 @@ export default function StockAuditLogsPage({ apiBaseUrl, authToken, authUser }) 
 
   const exportCsv = useCallback(() => {
     const csv = `${toCsv([
-      ["Item", "User", "Action", "Stock", "Date", "Item ID", "User ID", "Log ID"],
+      [
+        "Item",
+        "User",
+        "Action",
+        "Before Stock",
+        "After Stock",
+        "Before Track Stock",
+        "After Track Stock",
+        "Stock",
+        "Date",
+        "Item ID",
+        "User ID",
+        "Log ID",
+      ],
       ...rows.map((row) => [
         row.itemName,
         row.userName,
         row.actionLabel,
+        formatStockValue(row.previousStock),
+        formatStockValue(row.nextStock),
+        row.previousTrackStock == null ? "--" : row.previousTrackStock ? "Yes" : "No",
+        row.nextTrackStock == null ? "--" : row.nextTrackStock ? "Yes" : "No",
         row.stockSummary,
         row.date ? new Date(row.date).toISOString() : "",
         row.itemId,
