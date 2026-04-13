@@ -68,6 +68,7 @@ export default function CreateItemPage({
 }) {
   const didAutoSkuRef = useRef(false);
   const imageObjectUrlRef = useRef("");
+  const initialInventoryRef = useRef({ trackStock: false, inStock: null });
   const [name, setName] = useState("");
   const [category, setCategory] = useState("");
   const [description, setDescription] = useState("");
@@ -362,7 +363,12 @@ export default function CreateItemPage({
 
         const track = Boolean(data.trackStock ?? data.track_stock ?? true);
         setTrackStock(track);
-        setInStock(data.inStock == null ? "" : String(data.inStock));
+        const normalizedInStock = toIntOrNull(data.inStock);
+        setInStock(normalizedInStock == null ? "" : String(normalizedInStock));
+        initialInventoryRef.current = {
+          trackStock: track,
+          inStock: normalizedInStock,
+        };
       } catch (e) {
         if (!cancelled)
           setError(e instanceof Error ? e.message : "Failed to load item.");
@@ -395,6 +401,20 @@ export default function CreateItemPage({
       const skuNumber = toIntOrNull(skuValue);
       const categoryName = String(category || "").trim();
       const resolvedStoreId = String(storeId || assignedStoreId || "").trim();
+      const nextTrackStock = Boolean(trackStock);
+      const nextInStock = nextTrackStock ? toIntOrNull(inStock) : null;
+      const previousInventory = initialInventoryRef.current;
+      const stockValueChanged =
+        nextTrackStock &&
+        itemId &&
+        nextInStock !== previousInventory.inStock;
+      const shouldSendInventoryWithItemSave = !itemId || !stockValueChanged;
+
+      if (nextTrackStock && (String(inStock).trim() === "" || nextInStock == null || nextInStock < 0)) {
+        setError("In stock must be a whole number of 0 or higher.");
+        return;
+      }
+
       if (!resolvedStoreId) {
         setError("Store is required.");
         return;
@@ -413,9 +433,11 @@ export default function CreateItemPage({
       formData.set("cost", cost === "" ? "" : String(toNumberOrNull(cost) ?? ""));
       formData.set("sku", String(skuNumber ?? (skuValue || "")));
       formData.set("barcode", barcode || "");
-      formData.set("trackStock", String(Boolean(trackStock)));
+      formData.set("trackStock", String(nextTrackStock));
       formData.set("storeId", resolvedStoreId);
-      formData.set("inStock", trackStock ? String(toIntOrNull(inStock) ?? "") : "");
+      if (shouldSendInventoryWithItemSave) {
+        formData.set("inStock", nextTrackStock ? String(nextInStock ?? "") : "");
+      }
       if (imageFile) formData.set("image", imageFile);
 
       if (itemId) {
@@ -423,10 +445,21 @@ export default function CreateItemPage({
           method: "PATCH",
           body: formData,
         });
+
+        if (stockValueChanged) {
+          await apiRequest(`/items/${encodeURIComponent(itemId)}/stock`, {
+            method: "PATCH",
+            body: { inStock: nextInStock },
+          });
+        }
       } else {
         await apiRequest("/items", { method: "POST", body: formData });
       }
 
+      initialInventoryRef.current = {
+        trackStock: nextTrackStock,
+        inStock: nextInStock,
+      };
       onSaved?.();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to save item.");
