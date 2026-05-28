@@ -1048,7 +1048,7 @@
 }
 
 .colActions {
-  width: 170px;
+  width: 260px;
   text-align: right;
 }
 
@@ -1061,6 +1061,85 @@
   display: inline-flex;
   justify-content: flex-end;
   gap: 8px;
+  flex-wrap: wrap;
+}
+
+.transferDialogOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+}
+
+.transferDialogBackdrop {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  background: rgba(0, 0, 0, 0.42);
+  cursor: pointer;
+}
+
+.transferDialogPanel {
+  position: relative;
+  z-index: 1;
+  width: min(460px, 100%);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.28);
+  overflow: hidden;
+}
+
+.transferDialogHeader {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.transferDialogTitle {
+  font-size: 15px;
+  font-weight: 900;
+}
+
+.transferDialogSubtitle {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.transferDialogBody {
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.transferDialogMeta {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.transferDialogMeta strong {
+  color: var(--text);
+}
+
+.transferDialogError {
+  margin: 0;
+}
+
+.transferDialogActions {
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
 }
 
 .btnSmall {
