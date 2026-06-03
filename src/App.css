@@ -1949,6 +1949,7 @@
   max-width: 640px;
   width: 100%;
   margin: 0 auto;
+  overflow-y: auto;
 }
 
 .posCheckoutTotal {
@@ -2875,6 +2876,15 @@
 }
 
 .receiptsColType {
+  min-width: 110px;
+}
+
+.receiptsColPayment {
+  min-width: 120px;
+  font-weight: 650;
+}
+
+.receiptsColPaymentAmount {
   min-width: 110px;
 }
 

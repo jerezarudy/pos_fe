@@ -291,6 +291,7 @@ export default function CashierPosPage({ apiBaseUrl, authToken, authUser }) {
   const [cartById, setCartById] = useState({});
   const [checkoutOpen, setCheckoutOpen] = useState(false);
   const [cashReceived, setCashReceived] = useState("");
+  const [gcashReceived, setGcashReceived] = useState("");
   const [receiptOpen, setReceiptOpen] = useState(false);
   const [receiptEmail, setReceiptEmail] = useState("");
   const [lastSale, setLastSale] = useState(null);
@@ -718,6 +719,7 @@ export default function CashierPosPage({ apiBaseUrl, authToken, authUser }) {
   function openCheckout() {
     if (cartCount <= 0) return;
     setCashReceived(cartTotal ? cartTotal.toFixed(2) : "");
+    setGcashReceived("");
     setSaleError("");
     setCheckoutOpen(true);
     setCartOpen(false);
@@ -725,6 +727,7 @@ export default function CashierPosPage({ apiBaseUrl, authToken, authUser }) {
 
   function buildSalePayload({
     paymentType,
+    payments,
     amountPaid,
     change,
     cashReceivedAmount,
@@ -773,7 +776,11 @@ export default function CashierPosPage({ apiBaseUrl, authToken, authUser }) {
         : [],
       payment: {
         type: paymentType,
-        cashReceived: paymentType === "cash" ? cashReceivedAmount : undefined,
+        payments,
+        cashReceived:
+          paymentType === "cash" || paymentType === "split"
+            ? cashReceivedAmount
+            : undefined,
       },
       totals: {
         subtotal: cartSubtotal,
@@ -806,7 +813,11 @@ export default function CashierPosPage({ apiBaseUrl, authToken, authUser }) {
       totals: { ...apiPayload.totals, subtotal: cartSubtotal, discount: discountAmount },
       payment: {
         type: paymentType,
-        cashReceived: paymentType === "cash" ? cashReceivedAmount : null,
+        payments,
+        cashReceived:
+          paymentType === "cash" || paymentType === "split"
+            ? cashReceivedAmount
+            : null,
       },
       discount: selectedDiscount
         ? {
@@ -827,9 +838,11 @@ export default function CashierPosPage({ apiBaseUrl, authToken, authUser }) {
     if (cartCount <= 0) return;
     if (isSubmittingSale) return;
 
+    const cashAmount = Number(cashReceived);
+    const gcashAmount = Number(gcashReceived);
+
     if (method === "cash") {
-      const received = Number(cashReceived);
-      if (Number.isFinite(received) && received < cartTotal) {
+      if (Number.isFinite(cashAmount) && cashAmount < cartTotal) {
         const ok = window.confirm(
           "Cash received is less than the total. Continue anyway?",
         );
@@ -837,25 +850,59 @@ export default function CashierPosPage({ apiBaseUrl, authToken, authUser }) {
       }
     }
 
+    if (method === "split") {
+      const cashPart = Number.isFinite(cashAmount) ? cashAmount : 0;
+      const gcashPart = Number.isFinite(gcashAmount) ? gcashAmount : 0;
+      if (cashPart <= 0 || gcashPart <= 0) {
+        setSaleError("Enter both cash and GCash amounts for split payment.");
+        return;
+      }
+      if (cashPart + gcashPart < cartTotal) {
+        setSaleError("Split payment total is less than the amount due.");
+        return;
+      }
+    }
+
+    const paymentLabel =
+      method === "cash" ? "CASH" : method === "split" ? "SPLIT" : "GCASH";
     const ok = window.confirm(
-      `Confirm ${method.toUpperCase()} payment of ${formatMoney(cartTotal)}?`,
+      `Confirm ${paymentLabel} payment of ${formatMoney(cartTotal)}?`,
     );
     if (!ok) return;
 
     setSaleError("");
     setIsSubmittingSale(true);
 
-    const paymentType = method === "cash" ? "cash" : "card";
+    const paymentType =
+      method === "cash" ? "cash" : method === "split" ? "split" : "card";
     const received = Number(cashReceived);
     const cashReceivedAmount =
-      paymentType === "cash" && Number.isFinite(received) ? received : null;
+      (paymentType === "cash" || paymentType === "split") &&
+      Number.isFinite(received)
+        ? received
+        : null;
+    const gcashReceivedAmount = Number.isFinite(gcashAmount) ? gcashAmount : 0;
+    const payments =
+      paymentType === "split"
+        ? [
+            { type: "cash", amount: Math.max(0, cashReceivedAmount ?? 0) },
+            { type: "card", amount: Math.max(0, gcashReceivedAmount) },
+          ]
+        : [{ type: paymentType, amount: cartTotal }];
     const amountPaid =
-      paymentType === "cash" ? (cashReceivedAmount ?? cartTotal) : cartTotal;
+      paymentType === "cash"
+        ? (cashReceivedAmount ?? cartTotal)
+        : paymentType === "split"
+          ? payments.reduce((sum, p) => sum + (p.amount || 0), 0)
+          : cartTotal;
     const change =
-      paymentType === "cash" ? Math.max(0, amountPaid - cartTotal) : 0;
+      paymentType === "cash" || paymentType === "split"
+        ? Math.max(0, amountPaid - cartTotal)
+        : 0;
 
     const { apiPayload, uiPayload } = buildSalePayload({
       paymentType,
+      payments,
       amountPaid,
       change,
       cashReceivedAmount,
@@ -865,7 +912,7 @@ export default function CashierPosPage({ apiBaseUrl, authToken, authUser }) {
     try {
       await apiRequest("/sales", { method: "POST", body: apiPayload });
 
-      setLastSale({ payload: uiPayload, paymentType, amountPaid, change });
+      setLastSale({ payload: uiPayload, paymentType, payments, amountPaid, change });
 
       setCartById({});
       setCheckoutOpen(false);
@@ -912,9 +959,29 @@ export default function CashierPosPage({ apiBaseUrl, authToken, authUser }) {
             <div className="posReceiptPaymentType">
               Payment type:{" "}
               <span className="posReceiptPaymentValue">
-                {lastSale.paymentType}
+                {lastSale.paymentType === "cash"
+                  ? "CASH"
+                  : lastSale.paymentType === "split"
+                    ? "CASH + GCASH"
+                    : "GCASH"}
               </span>
             </div>
+            {lastSale.paymentType === "split" ? (
+              <div className="posReceiptPaymentType">
+                Cash:{" "}
+                <span className="posReceiptPaymentValue">
+                  {formatMoney(
+                    lastSale.payments?.find((p) => p.type === "cash")?.amount ?? 0,
+                  )}
+                </span>{" "}
+                / GCash:{" "}
+                <span className="posReceiptPaymentValue">
+                  {formatMoney(
+                    lastSale.payments?.find((p) => p.type === "card")?.amount ?? 0,
+                  )}
+                </span>
+              </div>
+            ) : null}
           </div>
 
           <div className="posReceiptEmailRow" aria-label="Email receipt">
@@ -1030,6 +1097,19 @@ export default function CashierPosPage({ apiBaseUrl, authToken, authUser }) {
             <div className="posCheckoutDivider" aria-hidden="true" />
           </div>
 
+          <div className="posCheckoutSection">
+            <div className="posCheckoutLabel">GCash received</div>
+            <input
+              className="posCheckoutInput"
+              inputMode="decimal"
+              value={gcashReceived}
+              onChange={(e) => setGcashReceived(e.target.value)}
+              placeholder="0.00"
+              aria-label="GCash received"
+            />
+            <div className="posCheckoutDivider" aria-hidden="true" />
+          </div>
+
           <div className="posCheckoutPayments" aria-label="Payment type">
             <button
               type="button"
@@ -1045,7 +1125,15 @@ export default function CashierPosPage({ apiBaseUrl, authToken, authUser }) {
               onClick={() => completePayment("card")}
               disabled={isSubmittingSale}
             >
-              CARD
+              GCASH
+            </button>
+            <button
+              type="button"
+              className="posPayBtn"
+              onClick={() => completePayment("split")}
+              disabled={isSubmittingSale}
+            >
+              CASH + GCASH
             </button>
           </div>
 

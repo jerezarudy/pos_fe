@@ -49,6 +49,14 @@ function extractObject(value) {
   return value;
 }
 
+function normalizePaymentType(value) {
+  const raw = typeof value === "string" ? value.trim().toLowerCase() : "";
+  if (!raw) return "unknown";
+  if (raw === "cash") return "cash";
+  if (raw === "card" || raw === "gcash" || raw === "debit" || raw === "credit") return "card";
+  return raw;
+}
+
 function getValueFromPaths(source, paths) {
   for (const path of paths) {
     const segments = String(path || "")
@@ -68,16 +76,139 @@ function getValueFromPaths(source, paths) {
   return null;
 }
 
+function blankPaymentSummary(type) {
+  return {
+    type,
+    sales: 0,
+    refunds: 0,
+    net: 0,
+    transactions: 0,
+    refundTransactions: 0,
+    cashReceived: 0,
+    changeGiven: 0,
+    cashCollected: 0,
+  };
+}
+
+function normalizePaymentSummary(raw, type) {
+  const payment = extractObject(raw);
+  const money = (paths) => roundMoney(getValueFromPaths({ payment }, paths));
+  const count = (paths) => {
+    const value = normalizeNumber(getValueFromPaths({ payment }, paths));
+    return Number.isFinite(value) ? Math.round(value) : 0;
+  };
+
+  return {
+    type,
+    sales: money(["payment.sales", "payment.paymentAmount", "payment.payment_amount", "payment.amount"]),
+    refunds: money(["payment.refunds", "payment.refundAmount", "payment.refund_amount"]),
+    net: money(["payment.net", "payment.netAmount", "payment.net_amount"]),
+    transactions: count([
+      "payment.transactions",
+      "payment.paymentTransactions",
+      "payment.payment_transactions",
+      "payment.count",
+    ]),
+    refundTransactions: count([
+      "payment.refundTransactions",
+      "payment.refund_transactions",
+      "payment.refundsCount",
+      "payment.refunds_count",
+    ]),
+    cashReceived: money(["payment.cashReceived", "payment.cash_received"]),
+    changeGiven: money(["payment.changeGiven", "payment.change_given"]),
+    cashCollected: money(["payment.cashCollected", "payment.cash_collected"]),
+  };
+}
+
 function normalizeEndOfDayReport(payload) {
   const root = extractObject(payload?.data ?? payload);
   const summary = extractObject(root.summary);
   const cash = extractObject(root.cash);
+  const paymentsSource = Array.isArray(root.payments)
+    ? root.payments
+    : Array.isArray(root.paymentMethods)
+      ? root.paymentMethods
+      : Array.isArray(root.payment_methods)
+        ? root.payment_methods
+        : [];
 
   const money = (paths) => roundMoney(getValueFromPaths({ root, summary, cash }, paths));
   const count = (paths) => {
     const value = normalizeNumber(getValueFromPaths({ root, summary, cash }, paths));
     return Number.isFinite(value) ? Math.round(value) : 0;
   };
+
+  const cashSummary = {
+    sales: money([
+      "cash.sales",
+      "cash.cashSales",
+      "cash.cash_sales",
+      "root.cashSales",
+      "root.cash_sales",
+    ]),
+    refunds: money([
+      "cash.refunds",
+      "cash.cashRefunds",
+      "cash.cash_refunds",
+      "root.cashRefunds",
+      "root.cash_refunds",
+    ]),
+    net: money([
+      "cash.net",
+      "cash.cashNet",
+      "cash.cash_net",
+      "root.cashNet",
+      "root.cash_net",
+    ]),
+    cashReceived: money([
+      "cash.cashReceived",
+      "cash.cash_received",
+      "root.cashReceived",
+      "root.cash_received",
+    ]),
+    changeGiven: money([
+      "cash.changeGiven",
+      "cash.change_given",
+      "root.changeGiven",
+      "root.change_given",
+    ]),
+    cashCollected: money([
+      "cash.cashCollected",
+      "cash.cash_collected",
+      "root.cashCollected",
+      "root.cash_collected",
+    ]),
+  };
+
+  const paymentSummaries = {
+    cash: blankPaymentSummary("cash"),
+    card: blankPaymentSummary("card"),
+  };
+
+  for (const payment of paymentsSource) {
+    if (!payment || typeof payment !== "object") continue;
+    const type = normalizePaymentType(payment.type ?? payment.paymentType ?? payment.payment_type);
+    if (type !== "cash" && type !== "card") continue;
+    const normalized = normalizePaymentSummary(payment, type);
+    paymentSummaries[type] = {
+      ...paymentSummaries[type],
+      ...normalized,
+      sales: paymentSummaries[type].sales + normalized.sales,
+      refunds: paymentSummaries[type].refunds + normalized.refunds,
+      net: paymentSummaries[type].net + normalized.net,
+      transactions: paymentSummaries[type].transactions + normalized.transactions,
+      refundTransactions:
+        paymentSummaries[type].refundTransactions + normalized.refundTransactions,
+      cashReceived: paymentSummaries[type].cashReceived + normalized.cashReceived,
+      changeGiven: paymentSummaries[type].changeGiven + normalized.changeGiven,
+      cashCollected: paymentSummaries[type].cashCollected + normalized.cashCollected,
+    };
+  }
+
+  if (!paymentsSource.length) {
+    paymentSummaries.cash = { ...paymentSummaries.cash, ...cashSummary };
+  }
 
   return {
     summary: {
@@ -138,47 +269,8 @@ function normalizeEndOfDayReport(payload) {
         "root.receipts",
       ]),
     },
-    cash: {
-      sales: money([
-        "cash.sales",
-        "cash.cashSales",
-        "cash.cash_sales",
-        "root.cashSales",
-        "root.cash_sales",
-      ]),
-      refunds: money([
-        "cash.refunds",
-        "cash.cashRefunds",
-        "cash.cash_refunds",
-        "root.cashRefunds",
-        "root.cash_refunds",
-      ]),
-      net: money([
-        "cash.net",
-        "cash.cashNet",
-        "cash.cash_net",
-        "root.cashNet",
-        "root.cash_net",
-      ]),
-      cashReceived: money([
-        "cash.cashReceived",
-        "cash.cash_received",
-        "root.cashReceived",
-        "root.cash_received",
-      ]),
-      changeGiven: money([
-        "cash.changeGiven",
-        "cash.change_given",
-        "root.changeGiven",
-        "root.change_given",
-      ]),
-      cashCollected: money([
-        "cash.cashCollected",
-        "cash.cash_collected",
-        "root.cashCollected",
-        "root.cash_collected",
-      ]),
-    },
+    cash: cashSummary,
+    payments: paymentSummaries,
   };
 }
 
@@ -187,9 +279,11 @@ function MetricCard({ label, value, helper, isLoading = false }) {
     <div className="card salesSummaryKpiCard">
       <div className="salesSummaryKpiLabel">{label}</div>
       <div className="salesSummaryKpiValue">{isLoading ? "--" : formatMoney(value)}</div>
-      <div className="salesSummaryKpiDelta salesSummaryKpiDeltaUp">
-        {isLoading ? "Loading..." : helper}
-      </div>
+      {helper ? (
+        <div className="salesSummaryKpiDelta salesSummaryKpiDeltaUp">
+          {isLoading ? "Loading..." : helper}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -232,6 +326,10 @@ export default function EndOfDayCashPage({
       cashReceived: 0,
       changeGiven: 0,
       cashCollected: 0,
+    },
+    payments: {
+      cash: blankPaymentSummary("cash"),
+      card: blankPaymentSummary("card"),
     },
   }));
 
@@ -340,6 +438,10 @@ export default function EndOfDayCashPage({
             changeGiven: 0,
             cashCollected: 0,
           },
+          payments: {
+            cash: blankPaymentSummary("cash"),
+            card: blankPaymentSummary("card"),
+          },
         });
       } finally {
         if (fetchId === lastFetchId.current) setIsLoading(false);
@@ -368,6 +470,23 @@ export default function EndOfDayCashPage({
     });
     return cards.map((card) => ({ ...card, helper }));
   }, [date, report.summary, showGrossProfit]);
+
+  const paymentCards = useMemo(() => {
+    const cashPayment = report.payments?.cash ?? blankPaymentSummary("cash");
+    const cardPayment = report.payments?.card ?? blankPaymentSummary("card");
+    return [
+      {
+        key: "cashSales",
+        label: "Cash sales",
+        value: cashPayment.sales,
+      },
+      {
+        key: "gcashSales",
+        label: "GCash sales",
+        value: cardPayment.sales,
+      },
+    ];
+  }, [report.payments]);
 
   return (
     <div className="page salesSummaryPage">
@@ -422,6 +541,12 @@ export default function EndOfDayCashPage({
 
       <div className="salesSummaryKpiGrid" aria-label="Key metrics">
         {summaryCards.map((card) => (
+          <MetricCard key={card.key} {...card} isLoading={isLoading} />
+        ))}
+      </div>
+
+      <div className="salesSummaryKpiGrid" aria-label="Payment method metrics">
+        {paymentCards.map((card) => (
           <MetricCard key={card.key} {...card} isLoading={isLoading} />
         ))}
       </div>
