@@ -121,6 +121,17 @@ function normalizePaymentSummary(raw, type) {
   };
 }
 
+function getNetPaymentAmount(payment) {
+  if (!payment || typeof payment !== "object") return 0;
+
+  const directNet = normalizeNumber(payment.net);
+  if (Number.isFinite(directNet)) return roundMoney(directNet);
+
+  const sales = normalizeNumber(payment.sales) ?? 0;
+  const refunds = normalizeNumber(payment.refunds) ?? 0;
+  return roundMoney(sales - refunds);
+}
+
 function normalizeEndOfDayReport(payload) {
   const root = extractObject(payload?.data ?? payload);
   const summary = extractObject(root.summary);
@@ -478,12 +489,12 @@ export default function EndOfDayCashPage({
       {
         key: "cashSales",
         label: "Cash sales",
-        value: cashPayment.sales,
+        value: getNetPaymentAmount(cashPayment),
       },
       {
         key: "gcashSales",
         label: "GCash sales",
-        value: cardPayment.sales,
+        value: getNetPaymentAmount(cardPayment),
       },
     ];
   }, [report.payments]);
