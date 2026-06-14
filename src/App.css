@@ -2863,6 +2863,10 @@
   min-width: 170px;
 }
 
+.receiptsColStore {
+  min-width: 180px;
+}
+
 .receiptsColItems {
   min-width: 220px;
 }

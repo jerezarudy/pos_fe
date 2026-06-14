@@ -141,6 +141,71 @@ function normalizeTotal(raw) {
   return Number.isFinite(numberValue) ? numberValue : 0;
 }
 
+function normalizePaymentType(value) {
+  const raw = typeof value === "string" ? value.trim().toLowerCase() : "";
+  if (!raw) return "";
+  if (raw === "cash") return "cash";
+  if (raw === "card" || raw === "debit" || raw === "credit" || raw === "gcash") return "card";
+  if (raw === "split") return "split";
+  return raw;
+}
+
+function titlePaymentType(value) {
+  if (value === "cash") return "CASH";
+  if (value === "card") return "GCASH";
+  if (value === "split") return "Split";
+  if (!value) return "--";
+  return String(value)
+    .split(/[_\s-]+/g)
+    .filter(Boolean)
+    .map((word) => word[0]?.toUpperCase() + word.slice(1))
+    .join(" ");
+}
+
+function extractPaymentDetails(raw) {
+  if (!raw || typeof raw !== "object") return [];
+  const candidates = [
+    raw.paymentDetails,
+    raw.payment_details,
+    raw.payments,
+    raw.payment?.payments,
+    raw.payment?.paymentDetails,
+    raw.payment?.payment_details,
+  ];
+  for (const candidate of candidates) {
+    if (Array.isArray(candidate)) return candidate;
+  }
+  return [];
+}
+
+function toMoneyNumber(value) {
+  if (typeof value === "number") return Number.isFinite(value) ? value : 0;
+  if (value == null || value === "") return 0;
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) ? numberValue : 0;
+}
+
+function normalizePaymentBreakdown(raw, paymentType, total) {
+  const breakdown = { cash: 0, card: 0 };
+
+  for (const detail of extractPaymentDetails(raw)) {
+    if (!detail || typeof detail !== "object") continue;
+    const method = normalizePaymentType(
+      detail.type ?? detail.paymentType ?? detail.payment_type ?? detail.method,
+    );
+    const amount = toMoneyNumber(detail.amount ?? detail.total ?? detail.value);
+    if (method === "cash") breakdown.cash += amount;
+    if (method === "card") breakdown.card += amount;
+  }
+
+  if (breakdown.cash <= 0 && breakdown.card <= 0) {
+    if (paymentType === "cash") breakdown.cash = total;
+    if (paymentType === "card") breakdown.card = total;
+  }
+
+  return breakdown;
+}
+
 function extractRecordItems(raw) {
   if (!raw || typeof raw !== "object") return [];
   const candidates = [
@@ -264,6 +329,19 @@ function normalizeTransaction(raw) {
     readText(raw.customer?.email) ||
     readText(raw.customer);
   const items = normalizeItems(raw);
+  const paymentMethod = normalizePaymentType(
+    raw.paymentType ?? raw.payment_type ?? raw.paymentMethod ?? raw.payment_method ?? "",
+  );
+  const paymentBreakdown = normalizePaymentBreakdown(raw, paymentMethod, normalizeTotal(raw));
+  const inferredPaymentMethod =
+    paymentMethod ||
+    (paymentBreakdown.cash > 0 && paymentBreakdown.card > 0
+      ? "split"
+      : paymentBreakdown.cash > 0
+        ? "cash"
+        : paymentBreakdown.card > 0
+          ? "card"
+          : "");
 
   return {
     id: String(id),
@@ -276,6 +354,11 @@ function normalizeTransaction(raw) {
     category,
     type: category === "refund" ? "Refund" : "Sale",
     total: normalizeTotal(raw),
+    paymentMethod: inferredPaymentMethod,
+    paymentLabel: titlePaymentType(inferredPaymentMethod),
+    paymentBreakdown,
+    cashAmount: paymentBreakdown.cash,
+    cardAmount: paymentBreakdown.card,
     raw,
   };
 }
@@ -296,6 +379,9 @@ function matchesSearch(row, query) {
     row.employee,
     row.customer,
     row.type,
+    row.paymentLabel,
+    Number.isFinite(row.cashAmount) ? row.cashAmount.toFixed(2) : "",
+    Number.isFinite(row.cardAmount) ? row.cardAmount.toFixed(2) : "",
     Number.isFinite(row.total) ? row.total.toFixed(2) : "",
   ];
   return fields.some((value) => String(value || "").toLowerCase().includes(normalized));
@@ -557,10 +643,13 @@ export default function TransactionsReportPage({ apiBaseUrl, authToken, authUser
       row.employee,
       row.customer,
       row.type,
+      row.paymentLabel,
+      (Number(row.cashAmount) || 0).toFixed(2),
+      (Number(row.cardAmount) || 0).toFixed(2),
       (Number(row.total) || 0).toFixed(2),
     ]);
     const csv = `${toCsv([
-      ["Receipt no.", "Date", "Items", "Employee", "Customer", "Type", "Total"],
+      ["Receipt no.", "Date", "Items", "Employee", "Customer", "Type", "Payment", "Cash", "GCash", "Total"],
       ...csvRows,
     ])}\n`;
     const filename = `transactions_${startDate || "start"}_${endDate || "end"}_${typeFilter}.csv`;
@@ -791,13 +880,16 @@ export default function TransactionsReportPage({ apiBaseUrl, authToken, authUser
                     <th className="receiptsColEmployee">Employee</th>
                     <th className="receiptsColCustomer">Customer</th>
                     <th className="receiptsColType">Type</th>
+                    <th className="receiptsColPayment">Payment</th>
+                    <th className="colMoney receiptsColPaymentAmount">Cash</th>
+                    <th className="colMoney receiptsColPaymentAmount">GCash</th>
                     <th className="colMoney">Total</th>
                   </tr>
                 </thead>
                 <tbody>
                   {rows.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="usersEmpty">
+                      <td colSpan={10} className="usersEmpty">
                         {emptyLabel}
                       </td>
                     </tr>
@@ -830,6 +922,13 @@ export default function TransactionsReportPage({ apiBaseUrl, authToken, authUser
                         <td className="receiptsColEmployee">{row.employee || "--"}</td>
                         <td className="receiptsColCustomer">{row.customer || "--"}</td>
                         <td className="receiptsColType">{row.type}</td>
+                        <td className="receiptsColPayment">{row.paymentLabel}</td>
+                        <td className="colMoney receiptsColPaymentAmount">
+                          {row.cashAmount > 0 ? formatMoney(row.cashAmount) : "--"}
+                        </td>
+                        <td className="colMoney receiptsColPaymentAmount">
+                          {row.cardAmount > 0 ? formatMoney(row.cardAmount) : "--"}
+                        </td>
                         <td className="colMoney">{formatMoney(row.total)}</td>
                       </tr>
                     ))
@@ -916,6 +1015,22 @@ export default function TransactionsReportPage({ apiBaseUrl, authToken, authUser
                 <div className="receiptsDrawerMetaRow">
                   <span className="receiptsDrawerMetaLabel">Type</span>
                   <span className="receiptsDrawerMetaValue">{selected.type}</span>
+                </div>
+                <div className="receiptsDrawerMetaRow">
+                  <span className="receiptsDrawerMetaLabel">Payment</span>
+                  <span className="receiptsDrawerMetaValue">{selected.paymentLabel}</span>
+                </div>
+                <div className="receiptsDrawerMetaRow">
+                  <span className="receiptsDrawerMetaLabel">Cash</span>
+                  <span className="receiptsDrawerMetaValue">
+                    {selected.cashAmount > 0 ? formatMoney(selected.cashAmount) : "--"}
+                  </span>
+                </div>
+                <div className="receiptsDrawerMetaRow">
+                  <span className="receiptsDrawerMetaLabel">GCash</span>
+                  <span className="receiptsDrawerMetaValue">
+                    {selected.cardAmount > 0 ? formatMoney(selected.cardAmount) : "--"}
+                  </span>
                 </div>
                 <div className="receiptsDrawerMetaRow">
                   <span className="receiptsDrawerMetaLabel">Date</span>

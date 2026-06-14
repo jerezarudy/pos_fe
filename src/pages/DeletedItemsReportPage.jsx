@@ -195,12 +195,56 @@ function normalizeDeletedItemLog(raw) {
       ]),
     ) || (userId ? String(userId) : "");
 
+  const storeId = firstValue(raw, [
+    "storeId",
+    "store_id",
+    "store.id",
+    "store._id",
+    "item.storeId",
+    "item.store_id",
+    "item.store.id",
+    "item.store._id",
+    "resource.storeId",
+    "resource.store_id",
+    "resource.store.id",
+    "resource.store._id",
+    "entity.storeId",
+    "entity.store_id",
+    "entity.store.id",
+    "entity.store._id",
+  ]);
+
+  const storeName =
+    readText(
+      firstValue(raw, [
+        "storeName",
+        "store_name",
+        "store.name",
+        "store.label",
+        "item.storeName",
+        "item.store_name",
+        "item.store.name",
+        "item.store.label",
+        "resource.storeName",
+        "resource.store_name",
+        "resource.store.name",
+        "resource.store.label",
+        "entity.storeName",
+        "entity.store_name",
+        "entity.store.name",
+        "entity.store.label",
+      ]),
+    ) || (storeId ? String(storeId) : "");
+
   return {
     id: String(id),
     itemId: itemId == null ? "" : String(itemId),
     itemName: itemName || "--",
     userId: userId == null ? "" : String(userId),
     userName: userName || "--",
+    storeId: storeId == null ? "" : String(storeId),
+    storeName: storeName || "--",
+    storeLabel: storeName || storeId || "--",
     action: "deleted",
     actionLabel: "Deleted",
     date: firstValue(raw, ["createdAt", "created_at", "timestamp", "date", "loggedAt"]),
@@ -355,13 +399,15 @@ export default function DeletedItemsReportPage({ apiBaseUrl, authToken, authUser
 
   const exportCsv = useCallback(() => {
     const csv = `${toCsv([
-      ["Item", "Deleted by", "Action", "Date", "Item ID", "User ID", "Log ID"],
+      ["Item", "Store", "Deleted by", "Action", "Date", "Item ID", "Store ID", "User ID", "Log ID"],
       ...rows.map((row) => [
         row.itemName,
+        row.storeLabel,
         row.userName,
         row.actionLabel,
         row.date ? new Date(row.date).toISOString() : "",
         row.itemId,
+        row.storeId,
         row.userId,
         row.id,
       ]),
@@ -535,6 +581,7 @@ export default function DeletedItemsReportPage({ apiBaseUrl, authToken, authUser
                 <thead>
                   <tr>
                     <th className="colName">Item</th>
+                    <th className="colStore">Store</th>
                     <th className="receiptsColEmployee">Deleted by</th>
                     <th className="receiptsColType">Action</th>
                     <th className="receiptsColDate">Date</th>
@@ -543,7 +590,7 @@ export default function DeletedItemsReportPage({ apiBaseUrl, authToken, authUser
                 <tbody>
                   {rows.length === 0 ? (
                     <tr>
-                      <td colSpan={4} className="usersEmpty">
+                      <td colSpan={5} className="usersEmpty">
                         {isLoading ? "Loading..." : "No deleted item logs found."}
                       </td>
                     </tr>
@@ -560,6 +607,7 @@ export default function DeletedItemsReportPage({ apiBaseUrl, authToken, authUser
                         }}
                       >
                         <td className="colName">{row.itemName || row.itemId || row.id}</td>
+                        <td className="colStore">{row.storeLabel || "--"}</td>
                         <td className="receiptsColEmployee">{row.userName || "--"}</td>
                         <td className="receiptsColType">{row.actionLabel}</td>
                         <td className="receiptsColDate">{formatAuditDate(row.date)}</td>
@@ -639,6 +687,16 @@ export default function DeletedItemsReportPage({ apiBaseUrl, authToken, authUser
                   <span className="receiptsDrawerMetaLabel">Item</span>
                   <span className="receiptsDrawerMetaValue">{selected.itemName || "--"}</span>
                 </div>
+                <div className="receiptsDrawerMetaRow">
+                  <span className="receiptsDrawerMetaLabel">Store</span>
+                  <span className="receiptsDrawerMetaValue">{selected.storeLabel || "--"}</span>
+                </div>
+                {selected.storeId ? (
+                  <div className="receiptsDrawerMetaRow">
+                    <span className="receiptsDrawerMetaLabel">Store ID</span>
+                    <span className="receiptsDrawerMetaValue">{selected.storeId}</span>
+                  </div>
+                ) : null}
                 <div className="receiptsDrawerMetaRow">
                   <span className="receiptsDrawerMetaLabel">Item ID</span>
                   <span className="receiptsDrawerMetaValue">{selected.itemId || "--"}</span>
