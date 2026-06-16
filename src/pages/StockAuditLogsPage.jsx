@@ -137,6 +137,13 @@ function formatStockSummary(row) {
   return "--";
 }
 
+function formatStoreLabel(storeName, storeId) {
+  const name = String(storeName || "").trim();
+  const id = String(storeId || "").trim();
+  if (name && id && name !== id) return `${name} (${id})`;
+  return name || id || "--";
+}
+
 function extractAuditLogsList(payload) {
   if (Array.isArray(payload)) return payload;
   if (Array.isArray(payload?.data)) return payload.data;
@@ -286,6 +293,43 @@ function normalizeAuditEntry(raw) {
       ]),
     ) || (userId ? String(userId) : "");
 
+  const storeId = firstValue(raw, [
+    "storeId",
+    "store_id",
+    "store.id",
+    "store._id",
+    "item.storeId",
+    "item.store_id",
+    "item.store.id",
+    "item.store._id",
+    "entity.storeId",
+    "entity.store_id",
+    "entity.store.id",
+    "entity.store._id",
+    "metadata.storeId",
+    "metadata.store_id",
+  ]);
+
+  const storeName =
+    readText(
+      firstValue(raw, [
+        "storeName",
+        "store_name",
+        "store.name",
+        "store.label",
+        "item.storeName",
+        "item.store_name",
+        "item.store.name",
+        "item.store.label",
+        "entity.storeName",
+        "entity.store_name",
+        "entity.store.name",
+        "entity.store.label",
+        "metadata.storeName",
+        "metadata.store_name",
+      ]),
+    ) || (storeId ? String(storeId) : "");
+
   const action = normalizeAuditAction(
     firstValue(raw, ["stockAction", "stock_action", "action", "event", "type"]),
   );
@@ -377,6 +421,9 @@ function normalizeAuditEntry(raw) {
     itemName: itemName || "--",
     userId: userId == null ? "" : String(userId),
     userName: userName || "--",
+    storeId: storeId == null ? "" : String(storeId),
+    storeName: storeName || "",
+    storeLabel: formatStoreLabel(storeName, storeId),
     action,
     actionLabel: formatAuditAction(action),
     date,
@@ -576,11 +623,11 @@ export default function StockAuditLogsPage({ apiBaseUrl, authToken, authUser }) 
         "Item",
         "User",
         "Action",
+        "Store",
         "Before Stock",
         "After Stock",
         "Before Track Stock",
         "After Track Stock",
-        "Stock",
         "Date",
         "Item ID",
         "User ID",
@@ -590,11 +637,11 @@ export default function StockAuditLogsPage({ apiBaseUrl, authToken, authUser }) 
         row.itemName,
         row.userName,
         row.actionLabel,
+        row.storeLabel,
         formatStockValue(row.previousStock),
         formatStockValue(row.nextStock),
         row.previousTrackStock == null ? "--" : row.previousTrackStock ? "Yes" : "No",
         row.nextTrackStock == null ? "--" : row.nextTrackStock ? "Yes" : "No",
-        row.stockSummary,
         row.date ? new Date(row.date).toISOString() : "",
         row.itemId,
         row.userId,
@@ -784,16 +831,18 @@ export default function StockAuditLogsPage({ apiBaseUrl, authToken, authUser }) 
                 <thead>
                   <tr>
                     <th className="colName">Item</th>
+                    <th className="receiptsColStore">Store</th>
                     <th className="receiptsColEmployee">User</th>
                     <th className="receiptsColType">Action</th>
-                    <th className="colStock">Stock</th>
+                    <th className="colStock">Before Stock</th>
+                    <th className="colStock">After Stock</th>
                     <th className="receiptsColDate">Date</th>
                   </tr>
                 </thead>
                 <tbody>
                   {rows.length === 0 ? (
                     <tr>
-                      <td colSpan={5} className="usersEmpty">
+                      <td colSpan={6} className="usersEmpty">
                         {isLoading ? "Loading..." : "No stock audit entries found."}
                       </td>
                     </tr>
@@ -810,8 +859,10 @@ export default function StockAuditLogsPage({ apiBaseUrl, authToken, authUser }) 
                         }}
                       >
                         <td className="colName">{row.itemName || row.itemId || row.id}</td>
+                        <td className="receiptsColStore">{row.storeName || "--"}</td>
                         <td className="receiptsColEmployee">{row.userName || "--"}</td>
                         <td className="receiptsColType">{row.actionLabel}</td>
+                        <td className="colStock">{formatStockValue(row.previousStock)}</td>
                         <td className="colStock">{formatStockValue(row.nextStock)}</td>
                         <td className="receiptsColDate">{formatAuditDate(row.date)}</td>
                       </tr>
@@ -901,6 +952,10 @@ export default function StockAuditLogsPage({ apiBaseUrl, authToken, authUser }) 
                 <div className="receiptsDrawerMetaRow">
                   <span className="receiptsDrawerMetaLabel">User ID</span>
                   <span className="receiptsDrawerMetaValue">{selected.userId || "--"}</span>
+                </div>
+                <div className="receiptsDrawerMetaRow">
+                  <span className="receiptsDrawerMetaLabel">Store</span>
+                  <span className="receiptsDrawerMetaValue">{selected.storeName || "--"}</span>
                 </div>
                 <div className="receiptsDrawerMetaRow">
                   <span className="receiptsDrawerMetaLabel">Action</span>
