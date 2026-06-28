@@ -282,6 +282,16 @@ function normalizeRecord(raw, fallbackType = "sale") {
     readText(raw.customer?.email) ||
     readText(raw.customer);
 
+  const store =
+    readText(raw.storeDetails?.name) ||
+    readText(raw.storeDetails?.storeName) ||
+    readText(raw.store?.name) ||
+    readText(raw.store?.storeName) ||
+    readText(raw.storeName) ||
+    readText(raw.store_name) ||
+    readText(raw.storeLabel) ||
+    readText(raw.store_label);
+
   const originalSaleId =
     raw.originalSaleId ??
     raw.original_sale_id ??
@@ -308,6 +318,7 @@ function normalizeRecord(raw, fallbackType = "sale") {
     date,
     employee: String(employee || "").trim(),
     customer: String(customer || "").trim(),
+    store: String(store || "").trim(),
     type,
     total: normalizeTotal(raw),
     refunded: type === "sale" ? isRefundedSale(raw) : false,
@@ -760,6 +771,7 @@ export default function CashierRefundsPage({
                   <tr>
                     <th className="receiptsColNo">Receipt no.</th>
                     <th className="receiptsColDate">Date</th>
+                    <th className="receiptsColStore">Store</th>
                     <th className="receiptsColItems">Items</th>
                     <th className="receiptsColCustomer">Customer</th>
                     <th className="receiptsColType">Status</th>
@@ -769,7 +781,7 @@ export default function CashierRefundsPage({
                 <tbody>
                   {rows.length === 0 ? (
                     <tr>
-                      <td colSpan={6} className="usersEmpty">
+                      <td colSpan={7} className="usersEmpty">
                         {isLoading
                           ? "Loading..."
                           : activeTab === "sales"
@@ -799,6 +811,7 @@ export default function CashierRefundsPage({
                       >
                         <td className="receiptsColNo">{row.receiptNo || row.id}</td>
                         <td className="receiptsColDate">{formatReceiptDate(row.date)}</td>
+                        <td className="receiptsColStore">{row.store || "--"}</td>
                         <td
                           className="receiptsColItems"
                           title={row.items?.length ? row.items.map((item) => `${item.name}${item.qty ? ` x${item.qty}` : ""}`).join(", ") : ""}

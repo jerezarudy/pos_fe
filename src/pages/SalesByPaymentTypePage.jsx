@@ -127,7 +127,7 @@ function normalizePaymentType(value) {
 }
 
 function titlePaymentType(value) {
-  if (value === "card") return "Card";
+  if (value === "card") return "GCASH";
   if (value === "cash") return "Cash";
   if (value === "unknown") return "Unknown";
   return String(value)

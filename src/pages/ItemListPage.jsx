@@ -292,6 +292,10 @@ export default function ItemListPage({
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
+  const [transferItem, setTransferItem] = useState(null);
+  const [transferStoreId, setTransferStoreId] = useState("");
+  const [transferQuantity, setTransferQuantity] = useState("");
+  const [transferError, setTransferError] = useState("");
 
   const fileInputRef = useRef(null);
 
@@ -606,6 +610,85 @@ export default function ItemListPage({
       await reloadItems();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to delete item.");
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  function openTransferDialog(item) {
+    const sourceStoreId = String(item?.storeId || "").trim();
+    const firstTarget =
+      storeOptions.find((s) => String(s.id) !== sourceStoreId)?.id || "";
+
+    setError("");
+    setMessage("");
+    setTransferError("");
+    setTransferItem(item);
+    setTransferStoreId(firstTarget);
+    setTransferQuantity("");
+  }
+
+  function closeTransferDialog() {
+    if (isSaving) return;
+    setTransferItem(null);
+    setTransferStoreId("");
+    setTransferQuantity("");
+    setTransferError("");
+  }
+
+  async function submitTransferItem(event) {
+    event.preventDefault();
+    if (!transferItem?.id || isSaving) return;
+
+    if (!apiBaseUrl) {
+      setTransferError("API base URL is not configured.");
+      return;
+    }
+
+    const targetStoreId = String(transferStoreId || "").trim();
+    if (!targetStoreId) {
+      setTransferError("Select a destination store.");
+      return;
+    }
+
+    const sourceStoreId = String(transferItem.storeId || "").trim();
+    if (sourceStoreId && targetStoreId === sourceStoreId) {
+      setTransferError("Select a different destination store.");
+      return;
+    }
+
+    const quantity = toPositiveInt(transferQuantity, 0);
+    if (quantity <= 0) {
+      setTransferError("Enter a transfer quantity greater than 0.");
+      return;
+    }
+
+    if (typeof transferItem.inStock === "number" && quantity > transferItem.inStock) {
+      setTransferError("Transfer quantity cannot be greater than current stock.");
+      return;
+    }
+
+    setIsSaving(true);
+    setTransferError("");
+    setMessage("");
+
+    try {
+      await apiRequest(`/items/${encodeURIComponent(transferItem.id)}/transfer`, {
+        method: "POST",
+        body: {
+          toStoreId: targetStoreId,
+          amount: quantity,
+        },
+      });
+
+      const targetStoreName = storeNameById.get(targetStoreId) || targetStoreId;
+      setMessage(`Transferred ${quantity} ${transferItem.name || "item"} to ${targetStoreName}.`);
+      setTransferItem(null);
+      setTransferStoreId("");
+      setTransferQuantity("");
+      await reloadItems();
+    } catch (e) {
+      setTransferError(e instanceof Error ? e.message : "Failed to transfer item.");
     } finally {
       setIsSaving(false);
     }
@@ -1143,6 +1226,19 @@ export default function ItemListPage({
                           <button
                             className="btn btnGhost btnSmall"
                             type="button"
+                            onClick={() => openTransferDialog(item)}
+                            disabled={
+                              isSaving ||
+                              isStoresLoading ||
+                              storeOptions.filter((s) => String(s.id) !== String(item.storeId || ""))
+                                .length === 0
+                            }
+                          >
+                            Transfer
+                          </button>
+                          <button
+                            className="btn btnGhost btnSmall"
+                            type="button"
                             onClick={() => onEditItem?.(item.id)}
                             disabled={isSaving || !onEditItem}
                             title={!onEditItem ? "Not available" : undefined}
@@ -1233,6 +1329,120 @@ export default function ItemListPage({
           </div>
         </div>
       </div>
+
+      {transferItem ? (
+        <div
+          className="transferDialogOverlay"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="transferDialogTitle"
+        >
+          <button
+            type="button"
+            className="transferDialogBackdrop"
+            aria-label="Close transfer dialog"
+            onClick={closeTransferDialog}
+          />
+          <form className="transferDialogPanel" onSubmit={submitTransferItem}>
+            <div className="transferDialogHeader">
+              <div>
+                <div className="transferDialogTitle" id="transferDialogTitle">
+                  Transfer item
+                </div>
+                <div className="transferDialogSubtitle">
+                  {transferItem.name || transferItem.id}
+                </div>
+              </div>
+              <button
+                type="button"
+                className="receiptsDrawerClose"
+                aria-label="Close"
+                onClick={closeTransferDialog}
+                disabled={isSaving}
+              >
+                x
+              </button>
+            </div>
+
+            <div className="transferDialogBody">
+              <div className="transferDialogMeta">
+                Current store:{" "}
+                <strong>
+                  {transferItem.storeName ||
+                    storeNameById.get(String(transferItem.storeId || "")) ||
+                    transferItem.storeId ||
+                    "--"}
+                </strong>
+                <span aria-hidden="true"> | </span>
+                In stock: <strong>{transferItem.inStock ?? "--"}</strong>
+              </div>
+
+              <label className="field">
+                <div className="fieldLabel">Destination store</div>
+                <select
+                  className="select"
+                  value={transferStoreId}
+                  onChange={(e) => setTransferStoreId(e.target.value)}
+                  disabled={isSaving || isStoresLoading}
+                  required
+                >
+                  <option value="">
+                    {isStoresLoading ? "Loading stores..." : "Select store"}
+                  </option>
+                  {storeOptions
+                    .filter((s) => String(s.id) !== String(transferItem.storeId || ""))
+                    .map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name || s.id}
+                      </option>
+                    ))}
+                </select>
+              </label>
+
+              <label className="field">
+                <div className="fieldLabel">Quantity to transfer</div>
+                <input
+                  className="textInput"
+                  type="number"
+                  min="1"
+                  max={
+                    typeof transferItem.inStock === "number"
+                      ? String(transferItem.inStock)
+                      : undefined
+                  }
+                  step="1"
+                  value={transferQuantity}
+                  onChange={(e) => setTransferQuantity(e.target.value)}
+                  placeholder="0"
+                  required
+                />
+              </label>
+
+              {transferError ? (
+                <div className="authError transferDialogError">{transferError}</div>
+              ) : null}
+            </div>
+
+            <div className="transferDialogActions">
+              <button
+                className="btn btnGhost"
+                type="button"
+                onClick={closeTransferDialog}
+                disabled={isSaving}
+              >
+                Cancel
+              </button>
+              <button
+                className="btn btnPrimary"
+                type="submit"
+                disabled={isSaving || isStoresLoading}
+              >
+                {isSaving ? "Transferring..." : "Transfer item"}
+              </button>
+            </div>
+          </form>
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -72,6 +72,26 @@ function formatReceiptDate(value) {
   }).format(date);
 }
 
+function normalizePaymentMethod(value) {
+  const raw = typeof value === "string" ? value.trim().toLowerCase() : "";
+  if (!raw) return "";
+  if (raw === "cash") return "cash";
+  if (raw === "card" || raw === "debit" || raw === "credit") return "card";
+  return raw;
+}
+
+function titlePaymentMethod(value) {
+  if (value === "cash") return "CASH";
+  if (value === "card") return "GCASH";
+  if (value === "split") return "Split";
+  if (!value) return "--";
+  return String(value)
+    .split(/[_\s-]+/g)
+    .filter(Boolean)
+    .map((word) => word[0]?.toUpperCase() + word.slice(1))
+    .join(" ");
+}
+
 function extractList(payload) {
   if (Array.isArray(payload)) return payload;
   if (Array.isArray(payload?.data)) return payload.data;
@@ -80,6 +100,49 @@ function extractList(payload) {
   if (Array.isArray(payload?.data?.items)) return payload.data.items;
   if (Array.isArray(payload?.data?.results)) return payload.data.results;
   return [];
+}
+
+function toMoneyNumber(value) {
+  if (typeof value === "number") return Number.isFinite(value) ? value : 0;
+  if (value == null || value === "") return 0;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function extractPaymentDetails(raw) {
+  if (!raw || typeof raw !== "object") return [];
+  const candidates = [
+    raw.paymentDetails,
+    raw.payment_details,
+    raw.payments,
+    raw.payment?.payments,
+    raw.payment?.paymentDetails,
+    raw.payment?.payment_details,
+  ];
+  for (const candidate of candidates) {
+    if (Array.isArray(candidate)) return candidate;
+  }
+  return [];
+}
+
+function normalizePaymentBreakdown(raw, paymentMethod, total) {
+  const breakdown = { cash: 0, card: 0 };
+  for (const detail of extractPaymentDetails(raw)) {
+    if (!detail || typeof detail !== "object") continue;
+    const method = normalizePaymentMethod(
+      detail.type ?? detail.paymentType ?? detail.payment_type ?? detail.method,
+    );
+    const amount = toMoneyNumber(detail.amount ?? detail.total ?? detail.value);
+    if (method === "cash") breakdown.cash += amount;
+    if (method === "card") breakdown.card += amount;
+  }
+
+  if (breakdown.cash <= 0 && breakdown.card <= 0) {
+    if (paymentMethod === "cash") breakdown.cash = total;
+    if (paymentMethod === "card") breakdown.card = total;
+  }
+
+  return breakdown;
 }
 
 function unwrapSalePayload(payload) {
@@ -200,7 +263,16 @@ function normalizeReceipt(raw) {
     "";
   const customer = raw.customer ?? raw.customerName ?? raw.customer_name ?? "";
   const type = raw.type ?? raw.saleType ?? raw.kind ?? "";
+  const paymentMethod = normalizePaymentMethod(
+    raw.paymentType ?? raw.payment_type ?? raw.paymentMethod ?? raw.payment_method ?? raw.payment?.type ?? "",
+  );
   const total = raw.total ?? raw.amount ?? raw.netSales ?? raw.net_sales ?? null;
+  const normalizedTotal = toMoneyNumber(total);
+  const paymentBreakdown = normalizePaymentBreakdown(
+    raw,
+    paymentMethod,
+    normalizedTotal,
+  );
   const currency = raw.currency ?? "PHP";
   if (!id) return null;
   return {
@@ -210,7 +282,9 @@ function normalizeReceipt(raw) {
     employee: String(employee || "").trim(),
     customer: String(customer || "").trim(),
     type: String(type || "").trim(),
-    total: typeof total === "number" ? total : total == null || total === "" ? 0 : Number(total),
+    paymentMethod,
+    paymentBreakdown,
+    total: normalizedTotal,
     currency: String(currency || "PHP"),
     raw,
   };
@@ -240,6 +314,7 @@ export default function ReceiptsReportPage({
   const [endDate, setEndDate] = useState(() => formatIsoDateInput(new Date()));
 
   const [dayPart, setDayPart] = useState("all");
+  const [paymentMethodFilter, setPaymentMethodFilter] = useState("all");
   const [employeeId, setEmployeeId] = useState(() => lockedEmployeeIdValue || "all");
   const [q, setQ] = useState("");
 
@@ -321,7 +396,7 @@ export default function ReceiptsReportPage({
 
   useEffect(() => {
     setPage(1);
-  }, [startDate, endDate, employeeId, q, limit]);
+  }, [paymentMethodFilter, startDate, endDate, employeeId, q, limit]);
 
   useEffect(() => {
     if (!lockedEmployeeIdValue) return;
@@ -349,6 +424,7 @@ export default function ReceiptsReportPage({
 
         const receiptsQs = buildQueryString({
           ...baseParams,
+          ...(paymentMethodFilter !== "all" ? { paymentType: paymentMethodFilter } : null),
           ...(employeeIdForQuery ? { employeeId: employeeIdForQuery } : null),
           ...(q.trim() ? { q: q.trim() } : null),
           page,
@@ -365,7 +441,10 @@ export default function ReceiptsReportPage({
         ]);
 
         const parsed = parsePagedResponse(payload, { page, limit });
-        const list = extractList(parsed.data).map(normalizeReceipt).filter(Boolean);
+        const list = extractList(parsed.data)
+          .map(normalizeReceipt)
+          .filter(Boolean)
+          .filter((row) => paymentMethodFilter === "all" || row.paymentMethod === paymentMethodFilter);
 
         const listWithItems = replaceEmployeeColumnWithItems
           ? await Promise.all(
@@ -436,7 +515,34 @@ export default function ReceiptsReportPage({
             employee: "Owner",
             customer: "--",
             type: "Sale",
+            paymentType: "cash",
             total: 450,
+            currency: "PHP",
+          }),
+          normalizeReceipt({
+            id: "demo:2",
+            receiptNo: "1-0011",
+            date: new Date().toISOString(),
+            employee: "Owner",
+            customer: "--",
+            type: "Sale",
+            paymentType: "card",
+            total: 125,
+            currency: "PHP",
+          }),
+          normalizeReceipt({
+            id: "demo:3",
+            receiptNo: "1-0012",
+            date: new Date().toISOString(),
+            employee: "Owner",
+            customer: "--",
+            type: "Sale",
+            paymentType: "split",
+            paymentDetails: [
+              { type: "cash", amount: 50 },
+              { type: "card", amount: 75 },
+            ],
+            total: 125,
             currency: "PHP",
           }),
         ].filter(Boolean));
@@ -456,15 +562,27 @@ export default function ReceiptsReportPage({
     page,
     q,
     replaceEmployeeColumnWithItems,
+    paymentMethodFilter,
     startDate,
     storeId,
   ]);
 
+  const visibleRows = useMemo(() => {
+    if (paymentMethodFilter === "all") return rows;
+    return rows.filter((row) => row.paymentMethod === paymentMethodFilter);
+  }, [paymentMethodFilter, rows]);
+
+  useEffect(() => {
+    if (!selected) return;
+    if (visibleRows.some((row) => row.id === selected.id)) return;
+    setSelected(null);
+  }, [selected, visibleRows]);
+
   const exportCsv = useCallback(() => {
     const header = replaceEmployeeColumnWithItems
-      ? ["Receipt no.", "Date", "Items", "Customer", "Type", "Total"]
-      : ["Receipt no.", "Date", "Employee", "Customer", "Type", "Total"];
-    const csvRows = rows.map((r) => [
+      ? ["Receipt no.", "Date", "Items", "Customer", "Type", "Payment", "Cash", "GCash", "Total"]
+      : ["Receipt no.", "Date", "Employee", "Customer", "Type", "Payment", "Cash", "GCash", "Total"];
+    const csvRows = visibleRows.map((r) => [
       r.receiptNo,
       r.date ? new Date(r.date).toISOString() : "",
       replaceEmployeeColumnWithItems
@@ -472,12 +590,15 @@ export default function ReceiptsReportPage({
         : r.employee,
       r.customer,
       r.type,
+      titlePaymentMethod(r.paymentMethod),
+      (Number(r.paymentBreakdown?.cash) || 0).toFixed(2),
+      (Number(r.paymentBreakdown?.card) || 0).toFixed(2),
       (Number(r.total) || 0).toFixed(2),
     ]);
     const csv = `${toCsv([header, ...csvRows])}\n`;
     const filename = `receipts_${startDate || "start"}_${endDate || "end"}.csv`;
     downloadTextFile({ filename, content: `\uFEFF${csv}`, mime: "text/csv;charset=utf-8" });
-  }, [endDate, replaceEmployeeColumnWithItems, rows, startDate]);
+  }, [endDate, replaceEmployeeColumnWithItems, startDate, visibleRows]);
 
   const rangeLabel = useMemo(() => {
     const start = new Date(startDate);
@@ -587,6 +708,21 @@ export default function ReceiptsReportPage({
               disabled={isLoading}
             >
               <option value="all">All day</option>
+            </select>
+          </div>
+
+          <div className="salesSummaryFilterGroup">
+            <select
+              className="select"
+              value={paymentMethodFilter}
+              onChange={(e) => setPaymentMethodFilter(e.target.value)}
+              aria-label="Payment method filter"
+              disabled={isLoading}
+            >
+              <option value="all">All payments</option>
+              <option value="cash">Cash</option>
+              <option value="card">GCash</option>
+              <option value="split">Split</option>
             </select>
           </div>
 
@@ -703,18 +839,21 @@ export default function ReceiptsReportPage({
                     </th>
                     <th className="receiptsColCustomer">Customer</th>
                     <th className="receiptsColType">Type</th>
+                    <th className="receiptsColPayment">Payment</th>
+                    <th className="colMoney receiptsColPaymentAmount">Cash</th>
+                    <th className="colMoney receiptsColPaymentAmount">GCash</th>
                     <th className="colMoney">Total</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {rows.length === 0 ? (
+                  {visibleRows.length === 0 ? (
                     <tr>
-                      <td colSpan={6} className="usersEmpty">
+                      <td colSpan={9} className="usersEmpty">
                         {isLoading ? "Loading..." : "No results."}
                       </td>
                     </tr>
                   ) : (
-                    rows.map((r) => (
+                    visibleRows.map((r) => (
                       <tr
                         key={r.id}
                         className={`receiptsRow ${selected?.id === r.id ? "receiptsRowActive" : ""}`}
@@ -742,6 +881,17 @@ export default function ReceiptsReportPage({
                         </td>
                         <td className="receiptsColCustomer">{r.customer || "--"}</td>
                         <td className="receiptsColType">{r.type || "--"}</td>
+                        <td className="receiptsColPayment">{titlePaymentMethod(r.paymentMethod)}</td>
+                        <td className="colMoney receiptsColPaymentAmount">
+                          {r.paymentBreakdown?.cash
+                            ? formatMoney(r.paymentBreakdown.cash)
+                            : "--"}
+                        </td>
+                        <td className="colMoney receiptsColPaymentAmount">
+                          {r.paymentBreakdown?.card
+                            ? formatMoney(r.paymentBreakdown.card)
+                            : "--"}
+                        </td>
                         <td className="colMoney">{formatMoney(r.total)}</td>
                       </tr>
                     ))
@@ -837,6 +987,28 @@ export default function ReceiptsReportPage({
                 <div className="receiptsDrawerMetaRow">
                   <span className="receiptsDrawerMetaLabel">Type</span>
                   <span className="receiptsDrawerMetaValue">{selected.type || "--"}</span>
+                </div>
+                <div className="receiptsDrawerMetaRow">
+                  <span className="receiptsDrawerMetaLabel">Payment</span>
+                  <span className="receiptsDrawerMetaValue">
+                    {titlePaymentMethod(selected.paymentMethod)}
+                  </span>
+                </div>
+                <div className="receiptsDrawerMetaRow">
+                  <span className="receiptsDrawerMetaLabel">Cash</span>
+                  <span className="receiptsDrawerMetaValue">
+                    {selected.paymentBreakdown?.cash
+                      ? formatMoney(selected.paymentBreakdown.cash)
+                      : "--"}
+                  </span>
+                </div>
+                <div className="receiptsDrawerMetaRow">
+                  <span className="receiptsDrawerMetaLabel">GCash</span>
+                  <span className="receiptsDrawerMetaValue">
+                    {selected.paymentBreakdown?.card
+                      ? formatMoney(selected.paymentBreakdown.card)
+                      : "--"}
+                  </span>
                 </div>
                 <div className="receiptsDrawerMetaRow">
                   <span className="receiptsDrawerMetaLabel">Date</span>
