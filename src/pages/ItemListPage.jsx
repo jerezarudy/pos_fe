@@ -316,7 +316,7 @@ export default function ItemListPage({
   ).trim();
 
   const [page, setPage] = useState(1);
-  const [limit, setLimit] = useState(20);
+  const [limit, setLimit] = useState(500);
   const [total, setTotal] = useState(null);
   const [hasNext, setHasNext] = useState(false);
   const [hasPrev, setHasPrev] = useState(false);
@@ -1226,9 +1226,9 @@ export default function ItemListPage({
               }}
               aria-label="Rows per page"
             >
-              <option value="10">10</option>
-              <option value="20">20</option>
-              <option value="50">50</option>
+              <option value="500">500</option>
+              <option value="1000">1000</option>
+              <option value="1500">1500</option>
             </select>
           </div>
         </div>
