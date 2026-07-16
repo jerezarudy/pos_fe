@@ -277,7 +277,7 @@ export default function CashierPosPage({ apiBaseUrl, authToken, authUser }) {
   const [isLoading, setIsLoading] = useState(false);
 
   const [itemsPage, setItemsPage] = useState(1);
-  const [itemsLimit, setItemsLimit] = useState(500);
+  const [itemsLimit, setItemsLimit] = useState(1000);
   const [itemsTotal, setItemsTotal] = useState(null);
   const [itemsHasNext, setItemsHasNext] = useState(false);
   const [itemsHasPrev, setItemsHasPrev] = useState(false);
@@ -1375,9 +1375,9 @@ export default function CashierPosPage({ apiBaseUrl, authToken, authUser }) {
               }}
               aria-label="Items per page"
             >
-              <option value="500">500</option>
               <option value="1000">1000</option>
               <option value="1500">1500</option>
+              <option value="2000">2000</option>
             </select>
           </div>
         </div>
