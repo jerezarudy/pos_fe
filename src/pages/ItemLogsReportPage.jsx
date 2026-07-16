@@ -4,10 +4,16 @@ import {
   buildQueryString,
   downloadTextFile,
   getActorHeaders,
+  getAuthUserRole,
   getFetchCredentials,
+  getReportStoreId,
   toCsv,
+  toNonNegativeInt,
   toPositiveInt,
 } from "../utils/common.js";
+import { makeStoreOptions, useStoresList } from "../utils/stores.js";
+
+const ITEM_LOG_ENDPOINTS = ["/audit-logs/items", "/audit-logs/items/crud", "/items/audit-logs"];
 
 function formatIsoDateInput(value) {
   const date = value instanceof Date ? value : new Date(value);
@@ -19,14 +25,9 @@ function formatIsoDateInput(value) {
 }
 
 function dateFromIsoDateInput(value) {
-  const raw = String(value || "").trim();
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value || "").trim());
   if (!match) return null;
-  const y = Number(match[1]);
-  const m = Number(match[2]);
-  const d = Number(match[3]);
-  if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) return null;
-  return new Date(y, m - 1, d);
+  return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
 }
 
 function addDays(date, deltaDays) {
@@ -40,11 +41,10 @@ function clampDateRange({ start, end }) {
     return { start: null, end: null };
   if (!(end instanceof Date) || Number.isNaN(end.getTime()))
     return { start, end: start };
-  if (start <= end) return { start, end };
-  return { start: end, end: start };
+  return start <= end ? { start, end } : { start: end, end: start };
 }
 
-function formatAuditDate(value) {
+function formatLogDate(value) {
   const date = value instanceof Date ? value : new Date(value);
   if (Number.isNaN(date.getTime())) return "--";
   return new Intl.DateTimeFormat("en-PH", {
@@ -62,24 +62,16 @@ function readText(value) {
   if (typeof value === "string") return value.trim();
   if (typeof value === "number") return String(value);
   if (typeof value === "object") {
-    const preferred =
-      value.name ??
-      value.fullName ??
-      value.email ??
-      value.label ??
-      value.title ??
-      value.id ??
-      value._id ??
-      "";
-    return String(preferred || "").trim();
+    return String(
+      value.name ?? value.fullName ?? value.email ?? value.label ?? value.title ?? value.id ?? "",
+    ).trim();
   }
   return String(value).trim();
 }
 
 function readPath(source, path) {
-  const keys = String(path || "").split(".");
   let current = source;
-  for (const key of keys) {
+  for (const key of String(path || "").split(".")) {
     if (current == null || typeof current !== "object") return undefined;
     current = current[key];
   }
@@ -94,7 +86,7 @@ function firstValue(source, paths) {
   return null;
 }
 
-function extractAuditLogsList(payload) {
+function extractLogsList(payload) {
   if (Array.isArray(payload)) return payload;
   if (Array.isArray(payload?.data)) return payload.data;
   if (Array.isArray(payload?.items)) return payload.items;
@@ -107,43 +99,59 @@ function extractAuditLogsList(payload) {
   return [];
 }
 
-function parseAuditPagedResponse(payload, fallbacks = {}) {
+function parsePagedResponse(payload, fallbacks = {}) {
   const root = payload && typeof payload === "object" ? payload : {};
   const nested =
     root.data && typeof root.data === "object" && !Array.isArray(root.data) ? root.data : {};
-
-  const data = extractAuditLogsList(payload);
   const page = toPositiveInt(root.page ?? nested.page, fallbacks.page ?? 1);
   const limit = toPositiveInt(root.limit ?? nested.limit, fallbacks.limit ?? 20);
+  const total = toNonNegativeInt(root.total ?? nested.total, fallbacks.total ?? null);
   const hasNext =
     typeof (root.hasNext ?? nested.hasNext) === "boolean"
       ? Boolean(root.hasNext ?? nested.hasNext)
       : typeof (root.has_next ?? nested.has_next) === "boolean"
         ? Boolean(root.has_next ?? nested.has_next)
-        : fallbacks.hasNext ?? false;
-
-  return { data, page, limit, hasNext };
+        : total != null
+          ? page * limit < total
+          : fallbacks.hasNext ?? false;
+  return { data: extractLogsList(payload), page, limit, total, hasNext };
 }
 
-function uniqOptions(list) {
-  const map = new Map();
-  for (const option of list || []) {
-    if (!option?.id) continue;
-    map.set(String(option.id), {
-      id: String(option.id),
-      label: String(option.label || option.id),
-    });
-  }
-  return Array.from(map.values()).sort((a, b) =>
-    a.label.localeCompare(b.label, undefined, { sensitivity: "base" }),
-  );
+function normalizeItemLogAction(raw) {
+  const value = String(raw || "").trim().toLowerCase();
+  if (value.includes("delete") || value.includes("remove")) return "deleted";
+  if (value.includes("create") || value.includes("add")) return "created";
+  if (value.includes("update") || value.includes("edit") || value.includes("patch")) return "updated";
+  return "";
 }
 
-function normalizeDeletedItemLog(raw) {
+function formatAction(action) {
+  if (action === "created") return "Created";
+  if (action === "deleted") return "Deleted";
+  if (action === "updated") return "Updated";
+  return "--";
+}
+
+function normalizeItemLog(raw) {
   if (!raw || typeof raw !== "object") return null;
 
   const id = firstValue(raw, ["id", "_id", "auditId", "audit_id", "logId", "log_id"]);
   if (!id) return null;
+
+  const rawAction = firstValue(raw, [
+    "itemAction",
+    "item_action",
+    "action",
+    "event",
+    "type",
+    "operation",
+    "method",
+  ]);
+  const action = normalizeItemLogAction(rawAction);
+  if (!action) return null;
+
+  const rawActionText = String(rawAction || "").toLowerCase();
+  if (rawActionText.includes("stock") || rawActionText.includes("transfer")) return null;
 
   const itemId = firstValue(raw, [
     "itemId",
@@ -154,8 +162,9 @@ function normalizeDeletedItemLog(raw) {
     "item._id",
     "entity.id",
     "entity._id",
+    "metadata.itemId",
+    "metadata.item_id",
   ]);
-
   const itemName =
     readText(
       firstValue(raw, [
@@ -165,6 +174,8 @@ function normalizeDeletedItemLog(raw) {
         "resource_name",
         "item.name",
         "entity.name",
+        "metadata.itemName",
+        "metadata.item_name",
       ]),
     ) || (itemId ? String(itemId) : "");
 
@@ -177,8 +188,9 @@ function normalizeDeletedItemLog(raw) {
     "user._id",
     "actor.id",
     "actor._id",
+    "metadata.userId",
+    "metadata.user_id",
   ]);
-
   const userName =
     readText(
       firstValue(raw, [
@@ -204,16 +216,13 @@ function normalizeDeletedItemLog(raw) {
     "item.store_id",
     "item.store.id",
     "item.store._id",
-    "resource.storeId",
-    "resource.store_id",
-    "resource.store.id",
-    "resource.store._id",
     "entity.storeId",
     "entity.store_id",
     "entity.store.id",
     "entity.store._id",
+    "metadata.storeId",
+    "metadata.store_id",
   ]);
-
   const storeName =
     readText(
       firstValue(raw, [
@@ -225,14 +234,12 @@ function normalizeDeletedItemLog(raw) {
         "item.store_name",
         "item.store.name",
         "item.store.label",
-        "resource.storeName",
-        "resource.store_name",
-        "resource.store.name",
-        "resource.store.label",
         "entity.storeName",
         "entity.store_name",
         "entity.store.name",
         "entity.store.label",
+        "metadata.storeName",
+        "metadata.store_name",
       ]),
     ) || (storeId ? String(storeId) : "");
 
@@ -243,29 +250,42 @@ function normalizeDeletedItemLog(raw) {
     userId: userId == null ? "" : String(userId),
     userName: userName || "--",
     storeId: storeId == null ? "" : String(storeId),
-    storeName: storeName || "--",
-    storeLabel: storeName || storeId || "--",
-    action: "deleted",
-    actionLabel: "Deleted",
+    storeName: storeName || "",
+    action,
+    actionLabel: formatAction(action),
     date: firstValue(raw, ["createdAt", "created_at", "timestamp", "date", "loggedAt"]),
-    raw,
   };
 }
 
-export default function DeletedItemsReportPage({ apiBaseUrl, authToken, authUser }) {
+function uniqOptions(list) {
+  const map = new Map();
+  for (const option of list || []) {
+    if (!option?.id) continue;
+    map.set(String(option.id), { id: String(option.id), label: String(option.label || option.id) });
+  }
+  return Array.from(map.values()).sort((a, b) =>
+    a.label.localeCompare(b.label, undefined, { sensitivity: "base" }),
+  );
+}
+
+export default function ItemLogsReportPage({ apiBaseUrl, authToken, authUser }) {
+  const authRole = useMemo(() => getAuthUserRole(authUser), [authUser]);
+  const canPickStore = authRole === "admin" || authRole === "owner";
+  const reportStoreId = useMemo(() => getReportStoreId(authUser), [authUser]);
   const todayKey = useMemo(() => formatIsoDateInput(new Date()), []);
   const [startDate, setStartDate] = useState(() => formatIsoDateInput(new Date()));
   const [endDate, setEndDate] = useState(() => formatIsoDateInput(new Date()));
   const [itemId, setItemId] = useState("all");
   const [userId, setUserId] = useState("all");
+  const [actionFilter, setActionFilter] = useState("all");
+  const [storeId, setStoreId] = useState(() => reportStoreId);
   const [page, setPage] = useState(1);
   const [limit, setLimit] = useState(1000);
 
-  const [auditRows, setAuditRows] = useState([]);
+  const [logs, setLogs] = useState([]);
   const [selected, setSelected] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
-
   const lastFetchId = useRef(0);
 
   const getAuthHeaders = useCallback(() => {
@@ -281,29 +301,50 @@ export default function DeletedItemsReportPage({ apiBaseUrl, authToken, authUser
         headers: getAuthHeaders(),
         credentials: getFetchCredentials(),
       });
-
       let payload = null;
       try {
         payload = await response.json();
       } catch {
         payload = null;
       }
-
       if (!response.ok) {
         const message =
           (payload && (payload.message || payload.error)) ||
           `Request failed (HTTP ${response.status}).`;
-        throw new Error(String(message));
+        const errorWithStatus = new Error(String(message));
+        errorWithStatus.status = response.status;
+        throw errorWithStatus;
       }
-
       return payload;
     },
     [apiBaseUrl, getAuthHeaders],
   );
 
+  const { stores, isStoresLoading } = useStoresList({ apiBaseUrl, apiRequest });
+  const storeOptions = useMemo(
+    () => makeStoreOptions({ stores, activeStoreId: storeId }),
+    [storeId, stores],
+  );
+  const storeNameById = useMemo(() => {
+    const map = new Map();
+    for (const store of storeOptions) map.set(String(store.id), String(store.name || store.id));
+    return map;
+  }, [storeOptions]);
+  const visibleStoreOptions = useMemo(() => {
+    if (canPickStore) return storeOptions;
+    const active = String(storeId || "").trim();
+    return active ? storeOptions.filter((store) => String(store.id) === active) : [];
+  }, [canPickStore, storeId, storeOptions]);
+
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (!canPickStore) setStoreId(reportStoreId);
+  }, [canPickStore, reportStoreId]);
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setPage(1);
-  }, [endDate, itemId, limit, startDate, userId]);
+  }, [actionFilter, endDate, itemId, limit, startDate, storeId, userId]);
 
   useEffect(() => {
     const start = new Date(startDate);
@@ -312,97 +353,96 @@ export default function DeletedItemsReportPage({ apiBaseUrl, authToken, authUser
     if (!clamped.start || !clamped.end) return;
 
     const fetchId = ++lastFetchId.current;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setIsLoading(true);
     setError("");
 
     (async () => {
-      try {
-        const collected = [];
-        const pageSize = 200;
-        let currentPage = 1;
-
-        for (let guard = 0; guard < 50; guard += 1) {
-          const payload = await apiRequest(
-            `/audit-logs/items/deleted${buildQueryString({
-              from: formatIsoDateInput(clamped.start),
-              to: formatIsoDateInput(clamped.end),
-              page: currentPage,
-              limit: pageSize,
-            })}`,
-          );
-
-          const parsed = parseAuditPagedResponse(payload, { page: currentPage, limit: pageSize });
-          const normalized = parsed.data.map(normalizeDeletedItemLog).filter(Boolean);
-          collected.push(...normalized);
-
-          if (!parsed.hasNext || normalized.length === 0) break;
-          currentPage += 1;
+      let lastError = null;
+      for (const endpoint of ITEM_LOG_ENDPOINTS) {
+        try {
+          const collected = [];
+          const pageSize = 200;
+          let currentPage = 1;
+          for (let guard = 0; guard < 50; guard += 1) {
+            const payload = await apiRequest(
+              `${endpoint}${buildQueryString({
+                from: formatIsoDateInput(clamped.start),
+                to: formatIsoDateInput(clamped.end),
+                page: currentPage,
+                limit: pageSize,
+                ...(storeId ? { storeId } : null),
+              })}`,
+            );
+            const parsed = parsePagedResponse(payload, { page: currentPage, limit: pageSize });
+            collected.push(...parsed.data.map(normalizeItemLog).filter(Boolean));
+            if (!parsed.hasNext || parsed.data.length === 0) break;
+            currentPage += 1;
+          }
+          if (fetchId !== lastFetchId.current) return;
+          setLogs(collected);
+          return;
+        } catch (e) {
+          lastError = e;
+          if (![404, 405].includes(Number(e?.status))) break;
         }
-
-        if (fetchId !== lastFetchId.current) return;
-        setAuditRows(collected);
-      } catch (e) {
-        if (fetchId !== lastFetchId.current) return;
-        setError(e instanceof Error ? e.message : "Failed to load deleted item logs.");
-        setAuditRows([]);
-      } finally {
-        if (fetchId === lastFetchId.current) setIsLoading(false);
       }
-    })();
-  }, [apiRequest, endDate, startDate]);
 
-  const itemOptions = useMemo(() => {
-    return uniqOptions(
-      auditRows.map((row) => ({
-        id: row.itemId || row.id,
-        label: row.itemName || row.itemId || row.id,
-      })),
-    );
-  }, [auditRows]);
+      if (fetchId !== lastFetchId.current) return;
+      setError(lastError instanceof Error ? lastError.message : "Failed to load item logs.");
+      setLogs([]);
+    })().finally(() => {
+      if (fetchId === lastFetchId.current) setIsLoading(false);
+    });
+  }, [apiRequest, endDate, startDate, storeId]);
 
-  const userOptions = useMemo(() => {
-    return uniqOptions(
-      auditRows.map((row) => ({
-        id: row.userId || row.id,
-        label: row.userName || row.userId || row.id,
-      })),
-    );
-  }, [auditRows]);
+  const itemOptions = useMemo(
+    () => uniqOptions(logs.map((row) => ({ id: row.itemId || row.id, label: row.itemName }))),
+    [logs],
+  );
+  const userOptions = useMemo(
+    () => uniqOptions(logs.map((row) => ({ id: row.userId || row.id, label: row.userName }))),
+    [logs],
+  );
+
+  const getStoreName = useCallback(
+    (row) => row.storeName || storeNameById.get(String(row.storeId || "")) || row.storeId || "--",
+    [storeNameById],
+  );
 
   const filteredRows = useMemo(() => {
-    return auditRows.filter((row) => {
+    return logs.filter((row) => {
       if (itemId !== "all" && row.itemId !== itemId) return false;
       if (userId !== "all" && row.userId !== userId) return false;
+      if (actionFilter !== "all" && row.action !== actionFilter) return false;
+      if (storeId && String(row.storeId || "") !== String(storeId)) return false;
       return true;
     });
-  }, [auditRows, itemId, userId]);
+  }, [actionFilter, itemId, logs, storeId, userId]);
 
   const total = filteredRows.length;
   const totalPages = Math.max(1, Math.ceil(total / limit));
-  const hasPrev = page > 1;
-  const hasNext = page < totalPages;
-
   const rows = useMemo(() => {
-    const offset = (page - 1) * limit;
-    return filteredRows.slice(offset, offset + limit);
+    const start = (page - 1) * limit;
+    return filteredRows.slice(start, start + limit);
   }, [filteredRows, limit, page]);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (page > totalPages) setPage(totalPages);
   }, [page, totalPages]);
 
   useEffect(() => {
-    if (!selected) return;
-    if (rows.some((row) => row.id === selected.id)) return;
-    setSelected(null);
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (selected && !rows.some((row) => row.id === selected.id)) setSelected(null);
   }, [rows, selected]);
 
   const exportCsv = useCallback(() => {
     const csv = `${toCsv([
-      ["Item", "Store", "Deleted by", "Action", "Date", "Item ID", "Store ID", "User ID", "Log ID"],
+      ["Item", "Store", "User", "Action", "Date", "Item ID", "Store ID", "User ID", "Log ID"],
       ...rows.map((row) => [
         row.itemName,
-        row.storeLabel,
+        getStoreName(row),
         row.userName,
         row.actionLabel,
         row.date ? new Date(row.date).toISOString() : "",
@@ -412,22 +452,23 @@ export default function DeletedItemsReportPage({ apiBaseUrl, authToken, authUser
         row.id,
       ]),
     ])}\n`;
-    const filename = `deleted-items_${startDate || "start"}_${endDate || "end"}.csv`;
-    downloadTextFile({ filename, content: `\uFEFF${csv}`, mime: "text/csv;charset=utf-8" });
-  }, [endDate, rows, startDate]);
+    downloadTextFile({
+      filename: `item-logs_${startDate || "start"}_${endDate || "end"}.csv`,
+      content: `\uFEFF${csv}`,
+      mime: "text/csv;charset=utf-8",
+    });
+  }, [endDate, getStoreName, rows, startDate]);
 
   const rangeLabel = useMemo(() => {
-    const start = new Date(startDate);
-    const end = new Date(endDate);
-    const clamped = clampDateRange({ start, end });
+    const clamped = clampDateRange({ start: new Date(startDate), end: new Date(endDate) });
     if (!clamped.start || !clamped.end) return "--";
     return `${formatIsoDateInput(clamped.start)} - ${formatIsoDateInput(clamped.end)}`;
   }, [endDate, startDate]);
 
   return (
     <div className="page receiptsReportPage">
-      <div className="salesSummaryHeaderBar" aria-label="Deleted items">
-        <div className="salesSummaryHeaderTitle">Deleted items</div>
+      <div className="salesSummaryHeaderBar" aria-label="Item logs">
+        <div className="salesSummaryHeaderTitle">Item logs</div>
       </div>
 
       <div className="card salesSummaryFiltersCard">
@@ -438,9 +479,7 @@ export default function DeletedItemsReportPage({ apiBaseUrl, authToken, authUser
               type="button"
               aria-label="Previous period"
               onClick={() => {
-                const start = new Date(startDate);
-                const end = new Date(endDate);
-                const clamped = clampDateRange({ start, end });
+                const clamped = clampDateRange({ start: new Date(startDate), end: new Date(endDate) });
                 if (!clamped.start || !clamped.end) return;
                 const days = Math.max(1, Math.round((clamped.end - clamped.start) / 86400000) + 1);
                 setStartDate(formatIsoDateInput(addDays(clamped.start, -days)));
@@ -455,14 +494,7 @@ export default function DeletedItemsReportPage({ apiBaseUrl, authToken, authUser
                 className="salesSummaryDateInput"
                 type="date"
                 value={startDate}
-                onChange={(e) => {
-                  const next = e.target.value;
-                  if (next && todayKey && next > todayKey) {
-                    setStartDate(todayKey);
-                    return;
-                  }
-                  setStartDate(next);
-                }}
+                onChange={(e) => setStartDate(e.target.value > todayKey ? todayKey : e.target.value)}
                 aria-label="Start date"
                 max={todayKey}
                 disabled={isLoading}
@@ -474,14 +506,7 @@ export default function DeletedItemsReportPage({ apiBaseUrl, authToken, authUser
                 className="salesSummaryDateInput"
                 type="date"
                 value={endDate}
-                onChange={(e) => {
-                  const next = e.target.value;
-                  if (next && todayKey && next > todayKey) {
-                    setEndDate(todayKey);
-                    return;
-                  }
-                  setEndDate(next);
-                }}
+                onChange={(e) => setEndDate(e.target.value > todayKey ? todayKey : e.target.value)}
                 aria-label="End date"
                 max={todayKey}
                 disabled={isLoading}
@@ -492,9 +517,7 @@ export default function DeletedItemsReportPage({ apiBaseUrl, authToken, authUser
               type="button"
               aria-label="Next period"
               onClick={() => {
-                const start = new Date(startDate);
-                const end = new Date(endDate);
-                const clamped = clampDateRange({ start, end });
+                const clamped = clampDateRange({ start: new Date(startDate), end: new Date(endDate) });
                 if (!clamped.start || !clamped.end) return;
                 const days = Math.max(1, Math.round((clamped.end - clamped.start) / 86400000) + 1);
                 const candidateEnd = addDays(clamped.end, days);
@@ -520,10 +543,10 @@ export default function DeletedItemsReportPage({ apiBaseUrl, authToken, authUser
               className="select"
               value={itemId}
               onChange={(e) => setItemId(e.target.value)}
-              aria-label="Deleted item filter"
+              aria-label="Item filter"
               disabled={isLoading}
             >
-              <option value="all">All deleted items</option>
+              <option value="all">All items</option>
               {itemOptions.map((item) => (
                 <option key={item.id} value={item.id}>
                   {item.label}
@@ -537,13 +560,46 @@ export default function DeletedItemsReportPage({ apiBaseUrl, authToken, authUser
               className="select"
               value={userId}
               onChange={(e) => setUserId(e.target.value)}
-              aria-label="Deleted by filter"
+              aria-label="User filter"
               disabled={isLoading}
             >
               <option value="all">All users</option>
               {userOptions.map((user) => (
                 <option key={user.id} value={user.id}>
                   {user.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="salesSummaryFilterGroup">
+            <select
+              className="select"
+              value={actionFilter}
+              onChange={(e) => setActionFilter(e.target.value)}
+              aria-label="Action filter"
+              disabled={isLoading}
+            >
+              <option value="all">All actions</option>
+              <option value="created">Created</option>
+              <option value="updated">Updated</option>
+              <option value="deleted">Deleted</option>
+            </select>
+          </div>
+
+          <div className="salesSummaryFilterGroup">
+            <select
+              className="select"
+              value={storeId}
+              onChange={(e) => setStoreId(e.target.value)}
+              aria-label="Store filter"
+              disabled={isLoading || isStoresLoading || !canPickStore}
+            >
+              {canPickStore ? <option value="">All stores</option> : null}
+              {!canPickStore && !storeId ? <option value="">No store assigned</option> : null}
+              {visibleStoreOptions.map((store) => (
+                <option key={store.id} value={store.id}>
+                  {store.name || store.id}
                 </option>
               ))}
             </select>
@@ -577,21 +633,21 @@ export default function DeletedItemsReportPage({ apiBaseUrl, authToken, authUser
             </div>
 
             <div className="tableWrap">
-              <table className="table receiptsTable" aria-label="Deleted items table">
+              <table className="table receiptsTable" aria-label="Item logs table">
                 <thead>
                   <tr>
                     <th className="colName">Item</th>
-                    <th className="colStore">Store</th>
-                    <th className="receiptsColEmployee">Deleted by</th>
+                    <th className="receiptsColStore">Store</th>
+                    <th className="receiptsColEmployee">User</th>
                     <th className="receiptsColType">Action</th>
-                    <th className="receiptsColDate">Date</th>
+                    <th className="receiptsColDate">Date / Time</th>
                   </tr>
                 </thead>
                 <tbody>
                   {rows.length === 0 ? (
                     <tr>
                       <td colSpan={5} className="usersEmpty">
-                        {isLoading ? "Loading..." : "No deleted item logs found."}
+                        {isLoading ? "Loading..." : "No item logs found."}
                       </td>
                     </tr>
                   ) : (
@@ -607,10 +663,10 @@ export default function DeletedItemsReportPage({ apiBaseUrl, authToken, authUser
                         }}
                       >
                         <td className="colName">{row.itemName || row.itemId || row.id}</td>
-                        <td className="colStore">{row.storeLabel || "--"}</td>
+                        <td className="receiptsColStore">{getStoreName(row)}</td>
                         <td className="receiptsColEmployee">{row.userName || "--"}</td>
                         <td className="receiptsColType">{row.actionLabel}</td>
-                        <td className="receiptsColDate">{formatAuditDate(row.date)}</td>
+                        <td className="receiptsColDate">{formatLogDate(row.date)}</td>
                       </tr>
                     ))
                   )}
@@ -624,7 +680,7 @@ export default function DeletedItemsReportPage({ apiBaseUrl, authToken, authUser
                   className="pagerBtn"
                   type="button"
                   aria-label="Previous page"
-                  disabled={!hasPrev || isLoading}
+                  disabled={page <= 1 || isLoading}
                   onClick={() => setPage((current) => Math.max(1, current - 1))}
                 >
                   {"<"}
@@ -633,7 +689,7 @@ export default function DeletedItemsReportPage({ apiBaseUrl, authToken, authUser
                   className="pagerBtn"
                   type="button"
                   aria-label="Next page"
-                  disabled={!hasNext || isLoading}
+                  disabled={page >= totalPages || isLoading}
                   onClick={() => setPage((current) => Math.min(totalPages, current + 1))}
                 >
                   {">"}
@@ -666,7 +722,7 @@ export default function DeletedItemsReportPage({ apiBaseUrl, authToken, authUser
 
         <aside className={`receiptsReportDrawer ${selected ? "receiptsReportDrawerOpen" : ""}`}>
           {selected ? (
-            <div className="receiptsDrawerBody" role="dialog" aria-label="Deleted item details">
+            <div className="receiptsDrawerBody" role="dialog" aria-label="Item log details">
               <div className="receiptsDrawerTop">
                 <button
                   className="receiptsDrawerClose"
@@ -679,7 +735,7 @@ export default function DeletedItemsReportPage({ apiBaseUrl, authToken, authUser
               </div>
 
               <div className="receiptsDrawerTotal">{selected.itemName || selected.itemId}</div>
-              <div className="receiptsDrawerTotalLabel">Deleted item</div>
+              <div className="receiptsDrawerTotalLabel">{selected.actionLabel}</div>
               <div className="receiptsDrawerDivider" aria-hidden="true" />
 
               <div className="receiptsDrawerMeta">
@@ -688,34 +744,24 @@ export default function DeletedItemsReportPage({ apiBaseUrl, authToken, authUser
                   <span className="receiptsDrawerMetaValue">{selected.itemName || "--"}</span>
                 </div>
                 <div className="receiptsDrawerMetaRow">
-                  <span className="receiptsDrawerMetaLabel">Store</span>
-                  <span className="receiptsDrawerMetaValue">{selected.storeLabel || "--"}</span>
-                </div>
-                {selected.storeId ? (
-                  <div className="receiptsDrawerMetaRow">
-                    <span className="receiptsDrawerMetaLabel">Store ID</span>
-                    <span className="receiptsDrawerMetaValue">{selected.storeId}</span>
-                  </div>
-                ) : null}
-                <div className="receiptsDrawerMetaRow">
                   <span className="receiptsDrawerMetaLabel">Item ID</span>
                   <span className="receiptsDrawerMetaValue">{selected.itemId || "--"}</span>
                 </div>
                 <div className="receiptsDrawerMetaRow">
-                  <span className="receiptsDrawerMetaLabel">Deleted by</span>
-                  <span className="receiptsDrawerMetaValue">{selected.userName || "--"}</span>
+                  <span className="receiptsDrawerMetaLabel">Store</span>
+                  <span className="receiptsDrawerMetaValue">{getStoreName(selected)}</span>
                 </div>
                 <div className="receiptsDrawerMetaRow">
-                  <span className="receiptsDrawerMetaLabel">User ID</span>
-                  <span className="receiptsDrawerMetaValue">{selected.userId || "--"}</span>
+                  <span className="receiptsDrawerMetaLabel">User</span>
+                  <span className="receiptsDrawerMetaValue">{selected.userName || "--"}</span>
                 </div>
                 <div className="receiptsDrawerMetaRow">
                   <span className="receiptsDrawerMetaLabel">Action</span>
                   <span className="receiptsDrawerMetaValue">{selected.actionLabel}</span>
                 </div>
                 <div className="receiptsDrawerMetaRow">
-                  <span className="receiptsDrawerMetaLabel">Date</span>
-                  <span className="receiptsDrawerMetaValue">{formatAuditDate(selected.date)}</span>
+                  <span className="receiptsDrawerMetaLabel">Date / Time</span>
+                  <span className="receiptsDrawerMetaValue">{formatLogDate(selected.date)}</span>
                 </div>
                 <div className="receiptsDrawerMetaRow">
                   <span className="receiptsDrawerMetaLabel">Log ID</span>
@@ -724,7 +770,7 @@ export default function DeletedItemsReportPage({ apiBaseUrl, authToken, authUser
               </div>
             </div>
           ) : (
-            <div className="receiptsDrawerEmpty">Select a deleted item entry to view details.</div>
+            <div className="receiptsDrawerEmpty">Select an item log entry to view details.</div>
           )}
         </aside>
       </div>
