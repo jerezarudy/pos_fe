@@ -320,7 +320,7 @@ export default function ItemListPage({
   ).trim();
 
   const [page, setPage] = useState(1);
-  const [limit, setLimit] = useState(1000);
+  const [limit, setLimit] = useState(500);
   const [total, setTotal] = useState(null);
   const [hasNext, setHasNext] = useState(false);
   const [hasPrev, setHasPrev] = useState(false);
@@ -868,10 +868,9 @@ export default function ItemListPage({
               (normalizedCategoryId ? categoryNameById.get(normalizedCategoryId) || "" : "");
 
             let resolvedStoreId = defaultImportStoreId;
-            let csvStoreName = "";
             if (canPickStore && !forcedStoreId) {
               const csvStoreId = getCsvCell(row, headerIndex, "storeId", "store_id");
-              csvStoreName = getCsvCell(row, headerIndex, "storeName", "store_name");
+              const csvStoreName = getCsvCell(row, headerIndex, "storeName", "store_name");
 
               if (csvStoreId) {
                 resolvedStoreId = csvStoreId;
@@ -883,13 +882,6 @@ export default function ItemListPage({
             if (!resolvedStoreId) {
               throw new Error("Store is required. Include storeId/storeName or select a store filter.");
             }
-
-            const resolvedStoreName =
-              storeNameById.get(String(resolvedStoreId)) ||
-              csvStoreName ||
-              (String(resolvedStoreId) === String(storeId) ? activeStoreName : "") ||
-              assignedStoreName ||
-              "";
 
             const price = toNumberOrNull(getCsvCell(row, headerIndex, "price"));
             const cost = toNumberOrNull(getCsvCell(row, headerIndex, "cost"));
@@ -918,7 +910,6 @@ export default function ItemListPage({
               barcode: getCsvCell(row, headerIndex, "barcode"),
               trackStock,
               storeId: resolvedStoreId,
-              storeName: resolvedStoreName,
             };
 
             if (trackStock) {
@@ -965,8 +956,6 @@ export default function ItemListPage({
     [
       apiBaseUrl,
       apiRequest,
-      activeStoreName,
-      assignedStoreName,
       canPickStore,
       categoryIdByName,
       categoryNameById,
@@ -974,8 +963,6 @@ export default function ItemListPage({
       forcedStoreId,
       reloadItems,
       storeIdByName,
-      storeNameById,
-      storeId,
     ],
   );
 
@@ -1335,9 +1322,9 @@ export default function ItemListPage({
               }}
               aria-label="Rows per page"
             >
+              <option value="500">500</option>
               <option value="1000">1000</option>
               <option value="1500">1500</option>
-              <option value="2000">2000</option>
             </select>
           </div>
         </div>
