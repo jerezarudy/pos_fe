@@ -155,7 +155,7 @@ export default function SalesByCategoryPage({ apiBaseUrl, authToken, authUser })
   const [dayPart, setDayPart] = useState("all");
   const [employeeId, setEmployeeId] = useState("all");
 
-  const [rowsPerPage, setRowsPerPage] = useState(1000);
+  const [rowsPerPage, setRowsPerPage] = useState(10);
   const [page, setPage] = useState(1);
 
   const [isLoading, setIsLoading] = useState(false);
@@ -613,9 +613,9 @@ export default function SalesByCategoryPage({ apiBaseUrl, authToken, authUser })
               disabled={isLoading}
               aria-label="Rows per page"
             >
-              <option value="1000">1000</option>
-              <option value="1500">1500</option>
-              <option value="2000">2000</option>
+              <option value="10">10</option>
+              <option value="20">20</option>
+              <option value="50">50</option>
             </select>
           </div>
         </div>

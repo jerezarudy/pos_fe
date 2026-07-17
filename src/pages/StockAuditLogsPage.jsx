@@ -4,14 +4,11 @@ import {
   buildQueryString,
   downloadTextFile,
   getActorHeaders,
-  getAuthUserRole,
   getFetchCredentials,
-  getReportStoreId,
   toCsv,
   toNonNegativeInt,
   toPositiveInt,
 } from "../utils/common.js";
-import { makeStoreOptions, useStoresList } from "../utils/stores.js";
 
 function formatIsoDateInput(value) {
   const date = value instanceof Date ? value : new Date(value);
@@ -440,10 +437,6 @@ function normalizeAuditEntry(raw) {
 }
 
 export default function StockAuditLogsPage({ apiBaseUrl, authToken, authUser }) {
-  const authRole = useMemo(() => getAuthUserRole(authUser), [authUser]);
-  const canPickStore = authRole === "admin" || authRole === "owner";
-  const reportStoreId = useMemo(() => getReportStoreId(authUser), [authUser]);
-  const [storeId, setStoreId] = useState(() => reportStoreId);
   const todayKey = useMemo(() => formatIsoDateInput(new Date()), []);
   const [startDate, setStartDate] = useState(() => formatIsoDateInput(new Date()));
   const [endDate, setEndDate] = useState(() => formatIsoDateInput(new Date()));
@@ -451,7 +444,7 @@ export default function StockAuditLogsPage({ apiBaseUrl, authToken, authUser }) 
   const [userId, setUserId] = useState("all");
   const [actionFilter, setActionFilter] = useState("all");
   const [page, setPage] = useState(1);
-  const [limit, setLimit] = useState(1000);
+  const [limit, setLimit] = useState(10);
 
   const [auditRows, setAuditRows] = useState([]);
   const [items, setItems] = useState([]);
@@ -496,52 +489,6 @@ export default function StockAuditLogsPage({ apiBaseUrl, authToken, authUser }) 
     },
     [apiBaseUrl, getAuthHeaders],
   );
-
-  const { stores, isStoresLoading } = useStoresList({ apiBaseUrl, apiRequest });
-
-  const storeOptions = useMemo(() => {
-    return makeStoreOptions({ stores, activeStoreId: storeId });
-  }, [storeId, stores]);
-
-  const storeNameById = useMemo(() => {
-    const map = new Map();
-    for (const option of storeOptions) {
-      map.set(String(option.id), String(option.name || option.id));
-    }
-    return map;
-  }, [storeOptions]);
-
-  const visibleStoreOptions = useMemo(() => {
-    if (canPickStore) return storeOptions;
-    const active = String(storeId || "").trim();
-    if (!active) return [];
-    return storeOptions.filter((s) => String(s.id) === active);
-  }, [canPickStore, storeId, storeOptions]);
-
-  const getAuditStoreName = useCallback(
-    (row) => {
-      const knownName = row?.storeId ? String(storeNameById.get(String(row.storeId)) || "") : "";
-      const rawName = String(row?.storeName || "").trim();
-      const itemName = String(row?.itemName || "").trim();
-      const rawLooksLikeItem = rawName && itemName && rawName.toLowerCase() === itemName.toLowerCase();
-      const rawLooksLikeId = rawName && row?.storeId && rawName === String(row.storeId);
-
-      if (knownName && (!rawName || rawLooksLikeItem || rawLooksLikeId)) return knownName;
-      return rawName || knownName || "--";
-    },
-    [storeNameById],
-  );
-
-  useEffect(() => {
-    if (!canPickStore) {
-      setStoreId(reportStoreId);
-      return;
-    }
-    if (authRole !== "admin" && reportStoreId && !storeId) {
-      setStoreId(reportStoreId);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authRole, canPickStore, reportStoreId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -594,7 +541,7 @@ export default function StockAuditLogsPage({ apiBaseUrl, authToken, authUser }) 
 
   useEffect(() => {
     setPage(1);
-  }, [actionFilter, endDate, itemId, limit, startDate, storeId, userId]);
+  }, [actionFilter, endDate, itemId, limit, startDate, userId]);
 
   useEffect(() => {
     const start = new Date(startDate);
@@ -621,7 +568,6 @@ export default function StockAuditLogsPage({ apiBaseUrl, authToken, authUser }) 
               limit: pageSize,
               ...(itemId !== "all" ? { itemId } : null),
               ...(userId !== "all" ? { userId } : null),
-              ...(storeId ? { storeId } : null),
             })}`,
           );
 
@@ -643,15 +589,13 @@ export default function StockAuditLogsPage({ apiBaseUrl, authToken, authUser }) 
         if (fetchId === lastFetchId.current) setIsLoading(false);
       }
     })();
-  }, [apiRequest, endDate, itemId, startDate, storeId, userId]);
+  }, [apiRequest, endDate, itemId, startDate, userId]);
 
   const filteredRows = useMemo(() => {
-    const actionRows = actionFilter === "all"
+    return actionFilter === "all"
       ? auditRows
       : auditRows.filter((row) => row.action === actionFilter);
-    if (!storeId) return actionRows;
-    return actionRows.filter((row) => String(row.storeId || "") === String(storeId));
-  }, [actionFilter, auditRows, storeId]);
+  }, [actionFilter, auditRows]);
 
   const total = filteredRows.length;
   const totalPages = Math.max(1, Math.ceil(total / limit));
@@ -693,7 +637,7 @@ export default function StockAuditLogsPage({ apiBaseUrl, authToken, authUser }) 
         row.itemName,
         row.userName,
         row.actionLabel,
-        getAuditStoreName(row),
+        row.storeLabel,
         formatStockValue(row.previousStock),
         formatStockValue(row.nextStock),
         row.previousTrackStock == null ? "--" : row.previousTrackStock ? "Yes" : "No",
@@ -706,7 +650,7 @@ export default function StockAuditLogsPage({ apiBaseUrl, authToken, authUser }) 
     ])}\n`;
     const filename = `stock-audit_${startDate || "start"}_${endDate || "end"}_${actionFilter}.csv`;
     downloadTextFile({ filename, content: `\uFEFF${csv}`, mime: "text/csv;charset=utf-8" });
-  }, [actionFilter, endDate, getAuditStoreName, rows, startDate]);
+  }, [actionFilter, endDate, rows, startDate]);
 
   const rangeLabel = useMemo(() => {
     const start = new Date(startDate);
@@ -855,24 +799,6 @@ export default function StockAuditLogsPage({ apiBaseUrl, authToken, authUser }) 
             </select>
           </div>
 
-          <div className="salesSummaryFilterGroup">
-            <select
-              className="select"
-              value={storeId}
-              onChange={(e) => setStoreId(e.target.value)}
-              aria-label="Store filter"
-              disabled={isLoading || isStoresLoading || !canPickStore}
-            >
-              {canPickStore ? <option value="">All stores</option> : null}
-              {!canPickStore && !storeId ? <option value="">No store assigned</option> : null}
-              {visibleStoreOptions.map((store) => (
-                <option key={store.id} value={store.id}>
-                  {store.name || store.id}
-                </option>
-              ))}
-            </select>
-          </div>
-
           <div className="salesSummaryFiltersRight">
             <div className="salesByItemRangeMeta" title={rangeLabel}>
               {rangeLabel}
@@ -933,7 +859,7 @@ export default function StockAuditLogsPage({ apiBaseUrl, authToken, authUser }) 
                         }}
                       >
                         <td className="colName">{row.itemName || row.itemId || row.id}</td>
-                        <td className="receiptsColStore">{getAuditStoreName(row)}</td>
+                        <td className="receiptsColStore">{row.storeName || "--"}</td>
                         <td className="receiptsColEmployee">{row.userName || "--"}</td>
                         <td className="receiptsColType">{row.actionLabel}</td>
                         <td className="colStock">{formatStockValue(row.previousStock)}</td>
@@ -983,9 +909,9 @@ export default function StockAuditLogsPage({ apiBaseUrl, authToken, authUser }) 
                   disabled={isLoading}
                   aria-label="Rows per page"
                 >
-                  <option value="1000">1000</option>
-                  <option value="1500">1500</option>
-                  <option value="2000">2000</option>
+                  <option value="10">10</option>
+                  <option value="20">20</option>
+                  <option value="50">50</option>
                 </select>
               </div>
             </div>
@@ -1029,7 +955,7 @@ export default function StockAuditLogsPage({ apiBaseUrl, authToken, authUser }) 
                 </div>
                 <div className="receiptsDrawerMetaRow">
                   <span className="receiptsDrawerMetaLabel">Store</span>
-                  <span className="receiptsDrawerMetaValue">{getAuditStoreName(selected)}</span>
+                  <span className="receiptsDrawerMetaValue">{selected.storeName || "--"}</span>
                 </div>
                 <div className="receiptsDrawerMetaRow">
                   <span className="receiptsDrawerMetaLabel">Action</span>

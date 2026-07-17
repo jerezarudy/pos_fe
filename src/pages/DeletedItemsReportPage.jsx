@@ -259,7 +259,7 @@ export default function DeletedItemsReportPage({ apiBaseUrl, authToken, authUser
   const [itemId, setItemId] = useState("all");
   const [userId, setUserId] = useState("all");
   const [page, setPage] = useState(1);
-  const [limit, setLimit] = useState(1000);
+  const [limit, setLimit] = useState(10);
 
   const [auditRows, setAuditRows] = useState([]);
   const [selected, setSelected] = useState(null);
@@ -655,9 +655,9 @@ export default function DeletedItemsReportPage({ apiBaseUrl, authToken, authUser
                   disabled={isLoading}
                   aria-label="Rows per page"
                 >
-                  <option value="1000">1000</option>
-                  <option value="1500">1500</option>
-                  <option value="2000">2000</option>
+                  <option value="10">10</option>
+                  <option value="20">20</option>
+                  <option value="50">50</option>
                 </select>
               </div>
             </div>

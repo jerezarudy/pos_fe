@@ -42,7 +42,7 @@ export default function CategoriesPage({ apiBaseUrl, authToken, authUser, search
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [page, setPage] = useState(1);
-  const [limit, setLimit] = useState(1000);
+  const [limit, setLimit] = useState(20);
   const [total, setTotal] = useState(null);
   const [hasNext, setHasNext] = useState(false);
   const [hasPrev, setHasPrev] = useState(false);
@@ -459,9 +459,9 @@ export default function CategoriesPage({ apiBaseUrl, authToken, authUser, search
                 }}
                 aria-label="Rows per page"
               >
-                <option value="1000">1000</option>
-                <option value="1500">1500</option>
-                <option value="2000">2000</option>
+                <option value="10">10</option>
+                <option value="20">20</option>
+                <option value="50">50</option>
               </select>
             </div>
           </div>

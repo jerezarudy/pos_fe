@@ -94,7 +94,7 @@ export default function LowStockItemsPage({
   const [threshold, setThreshold] = useState(10);
 
   const [page, setPage] = useState(1);
-  const [limit, setLimit] = useState(1000);
+  const [limit, setLimit] = useState(20);
   const [pageInput, setPageInput] = useState("1");
 
   const [items, setItems] = useState([]);
@@ -503,9 +503,10 @@ export default function LowStockItemsPage({
               disabled={isLoading}
               aria-label="Rows per page"
             >
-              <option value="1000">1000</option>
-              <option value="1500">1500</option>
-              <option value="2000">2000</option>
+              <option value="10">10</option>
+              <option value="20">20</option>
+              <option value="50">50</option>
+              <option value="100">100</option>
             </select>
           </div>
         </div>
