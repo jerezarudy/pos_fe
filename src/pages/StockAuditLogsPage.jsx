@@ -404,7 +404,7 @@ export default function StockAuditLogsPage({ apiBaseUrl, authToken, authUser }) 
   const [userId, setUserId] = useState("all");
   const [actionFilter, setActionFilter] = useState("all");
   const [page, setPage] = useState(1);
-  const [limit, setLimit] = useState(500);
+  const [limit, setLimit] = useState(100);
 
   const [auditRows, setAuditRows] = useState([]);
   const [items, setItems] = useState([]);
@@ -901,9 +901,9 @@ export default function StockAuditLogsPage({ apiBaseUrl, authToken, authUser }) 
                   disabled={isLoading}
                   aria-label="Rows per page"
                 >
-                  <option value="500">500</option>
-                  <option value="1000">1000</option>
-                  <option value="1500">1500</option>
+                  <option value="100">100</option>
+                  <option value="200">200</option>
+                  <option value="300">300</option>
                 </select>
               </div>
             </div>
